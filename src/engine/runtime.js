@@ -639,6 +639,10 @@ class Runtime extends EventEmitter {
         return 'FRAMERATE_CHANGED';
     }
 
+    static get OPSPERFRAME_CHANGED () {
+        return 'OPSPERFRAME_CHANGED';
+    }
+
     /**
      * Event name for interpolation changing.
      * @const {string}
@@ -2697,6 +2701,15 @@ class Runtime extends EventEmitter {
         this.emit(Runtime.FRAMERATE_CHANGED, framerate);
     }
 
+    setOpsPerFrame (opsPerFrame) {
+        if (opsPerFrame < 0) opsPerFrame = 1;
+        this.frameLoop.setOpsPerFrame(opsPerFrame);
+        this.emit(Runtime.OPSPERFRAME_CHANGED, opsPerFrame);
+    }
+    getOpsPerFrame () {
+        return this.frameLoop.opsPerFrame;
+    }
+
     /**
      * tw: Enable or disable interpolation.
      * @param {boolean} interpolationEnabled True if interpolation should be enabled.
@@ -2899,6 +2912,9 @@ class Runtime extends EventEmitter {
         if (typeof parsed.framerate === 'number') {
             this.setFramerate(parsed.framerate);
         }
+        if (typeof parsed.opsPerFrame === 'number') {
+            this.setOpsPerFrame(parsed.opsPerFrame);
+        }
         if (parsed.turbo) {
             this.turboMode = true;
             this.emit(Runtime.TURBO_MODE_ON);
@@ -2922,6 +2938,7 @@ class Runtime extends EventEmitter {
     _generateAllProjectOptions () {
         return {
             framerate: this.frameLoop.framerate,
+            opsPerFrame: this.frameLoop.opsPerFrame,
             runtimeOptions: this.runtimeOptions,
             interpolation: this.interpolationEnabled,
             turbo: this.turboMode,

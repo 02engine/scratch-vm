@@ -181,6 +181,9 @@ class VirtualMachine extends EventEmitter {
         this.runtime.on(Runtime.FRAMERATE_CHANGED, framerate => {
             this.emit(Runtime.FRAMERATE_CHANGED, framerate);
         });
+        this.runtime.on(Runtime.OPSPERFRAME_CHANGED, opsPerFrame => {
+            this.emit(Runtime.OPSPERFRAME_CHANGED, opsPerFrame);
+        });
         this.runtime.on(Runtime.INTERPOLATION_CHANGED, framerate => {
             this.emit(Runtime.INTERPOLATION_CHANGED, framerate);
         });
@@ -286,6 +289,13 @@ class VirtualMachine extends EventEmitter {
      */
     setCompatibilityMode (compatibilityModeOn) {
         this.runtime.setCompatibilityMode(!!compatibilityModeOn);
+    }
+
+    setOpsPerFrame (framerate) {
+        this.runtime.setOpsPerFrame(framerate);
+    }
+    getOpsPerFrame () {
+        return this.runtime.getOpsPerFrame();
     }
 
     setFramerate (framerate) {
@@ -1119,6 +1129,7 @@ class VirtualMachine extends EventEmitter {
      * @return {string} the costume's SVG string if it's SVG,
      *     a dataURI if it's a PNG or JPG, or null if it couldn't be found or decoded.
      */
+    
     getCostume (costumeIndex) {
         const asset = this.editingTarget.getCostumes()[costumeIndex].asset;
         if (!asset || !this.runtime || !this.runtime.storage) return null;
@@ -1132,6 +1143,7 @@ class VirtualMachine extends EventEmitter {
         log.error(`Unhandled format: ${asset.dataFormat}`);
         return null;
     }
+
 
     /**
      * TW: Get the raw binary data to use when exporting a costume to the user's local file system.

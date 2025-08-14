@@ -1,6 +1,6 @@
-## 02engine/scratch-vm
+## TurboWarp/scratch-vm
 
-Modified Scratch VM with a JIT compiler and more features.Faster than Turbowarp.
+Modified Scratch VM with a JIT compiler and more features.
 
 This is a drop-in replacement for LLK/scratch-vm.
 
