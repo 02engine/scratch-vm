@@ -7,7 +7,7 @@
   "homepage": "https://github.com/scratchfoundation/scratch-vm#readme",
   "repository": {
     "type": "git",
-    "url": "https://github.com/scratchfoundation/scratch-vm.git"
+    "url": "https://github.com/02engine/scratch-vm.git"
   },
   "main": "./src/index.js",
   "browser": "./src/index.js",
@@ -47,9 +47,9 @@
     "format-message": "6.2.1",
     "htmlparser2": "3.10.0",
     "immutable": "3.8.2",
-    "scratch-parser": "github:TurboWarp/scratch-parser#master",
-    "scratch-sb1-converter": "0.2.7",
-    "scratch-translate-extension-languages": "0.0.20191118205314",
+    "scratch-parser": "git+https://github.com/02engine/scratch-parser.git#main",
+    "scratch-sb1-converter": "git+https://github.com/02engine/scratch-sb1-converter.git#main",
+    "scratch-translate-extension-languages": "git+https://github.com/02engine/scratch-translate-extension-languages.git#main",
     "text-encoding": "0.7.0",
     "uuid": "8.3.2",
     "worker-loader": "^1.1.1"
@@ -81,7 +81,7 @@
     "scratch-blocks": "0.1.0-prerelease.20230527085947",
     "scratch-l10n": "3.16.20231222031921",
     "scratch-render": "0.1.0-prerelease.20231220210403",
-    "scratch-render-fonts": "github:TurboWarp/scratch-render-fonts#master",
+    "scratch-render-fonts": "git+https://github.com/02engine/scratch-render-fonts.git#main",
     "scratch-storage": "2.3.1",
     "script-loader": "0.7.2",
     "stats.js": "0.17.0",
