@@ -449,6 +449,14 @@ class Runtime extends EventEmitter {
          */
         this.platform = Object.assign({}, platform);
 
+         /**
+         * Screen refresh time speculated from screen refresh rate, in milliseconds.
+         * Indicates time passed between two screen refreshments.
+         * Based on site isolation status, the resolution could be ~0.1ms or lower.
+         * @type {!number}
+         */
+        this.screenRefreshTime = 0;
+
         this._initScratchLink();
 
         this.resetRunId();
@@ -2524,8 +2532,10 @@ class Runtime extends EventEmitter {
     }
 
     _renderInterpolatedPositions () {
-        const frameStarted = this._lastStepTime;
-        const now = Date.now();
+        //const frameStarted = this._lastStepTime;
+        //const now = Date.now();
+        const frameStarted = this.frameLoop._lastStepTime;
+        const now = this.frameLoop.now();
         const timeSinceStart = now - frameStarted;
         const progressInFrame = Math.min(1, Math.max(0, timeSinceStart / this.currentStepTime));
 
@@ -2596,7 +2606,7 @@ class Runtime extends EventEmitter {
         // Store threads that completed this iteration for testing and other
         // internal purposes.
         this._lastStepDoneThreads = doneThreads;
-        if (this.renderer) {
+        /*if (this.renderer) {
             // @todo: Only render when this.redrawRequested or clones rendered.
             if (this.profiler !== null) {
                 if (rendererDrawProfilerId === -1) {
@@ -2613,7 +2623,7 @@ class Runtime extends EventEmitter {
             if (this.profiler !== null) {
                 this.profiler.stop();
             }
-        }
+        }*/
 
         if (this._refreshTargets) {
             this.emit(Runtime.TARGETS_UPDATE, false /* Don't emit project changed */);
@@ -2630,9 +2640,9 @@ class Runtime extends EventEmitter {
             this.profiler.reportFrames();
         }
 
-        if (this.interpolationEnabled) {
+        /*if (this.interpolationEnabled) {
             this._lastStepTime = Date.now();
-        }
+        }*/
     }
 
     /**
