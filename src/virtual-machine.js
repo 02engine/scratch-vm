@@ -770,7 +770,8 @@ class VirtualMachine extends EventEmitter {
                 if (!url) {
                     throw new Error(`Unknown extension: ${extensionID}`);
                 }
-                if (await this.securityManager.canLoadExtensionFromProject(url)) {
+                //if (await this.securityManager.canLoadExtensionFromProject(url)) {
+                if (true) {
                     extensionPromises.push(this.extensionManager.loadExtensionURL(url));
                 } else {
                     throw new Error(`Permission to load extension denied: ${extensionID}`);

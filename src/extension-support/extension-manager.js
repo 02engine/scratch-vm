@@ -222,7 +222,8 @@ class ExtensionManager {
 
         //const sandboxMode = await this.securityManager.getSandboxMode(extensionURL);
         const sandboxMode='unsandboxed';
-        const rewritten = await this.securityManager.rewriteExtensionURL(extensionURL);
+        //const rewritten = await this.securityManager.rewriteExtensionURL(extensionURL);
+        const rewritten = extensionURL;
 
         if (sandboxMode === 'unsandboxed') {
             const {load} = require('./tw-unsandboxed-extension-runner');
