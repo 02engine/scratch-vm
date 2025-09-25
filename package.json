@@ -55,7 +55,7 @@
     "worker-loader": "^1.1.1"
   },
   "peerDependencies": {
-    "@turbowarp/scratch-svg-renderer": "^1.0.0-202312300007-62fe825"
+    "@turbowarp/scratch-svg-renderer": "github:02engine/scratch-svg-renderer#main"
   },
   "devDependencies": {
     "@babel/core": "7.13.10",
