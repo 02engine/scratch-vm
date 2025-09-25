@@ -55,7 +55,7 @@
     "worker-loader": "^1.1.1"
   },
   "peerDependencies": {
-    "@turbowarp/scratch-svg-renderer": "github:02engine/scratch-svg-renderer#main"
+    "@turbowarp/scratch-svg-renderer": "github:Deep-sea-lab/scratch-svg-renderer#main"
   },
   "devDependencies": {
     "@babel/core": "7.13.10",
