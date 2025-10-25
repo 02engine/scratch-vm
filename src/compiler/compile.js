@@ -1,9 +1,14 @@
 const {IRGenerator} = require('./irgen');
 const JSGenerator = require('./jsgen');
+const {IROptimizer} = require('./iroptimizer');
 
 const compile = thread => {
     const irGenerator = new IRGenerator(thread);
     const ir = irGenerator.generate();
+    
+    // Apply IR optimizations
+    const optimizer = new IROptimizer(ir);
+    optimizer.optimize();
 
     const procedures = {};
     const target = thread.target;
