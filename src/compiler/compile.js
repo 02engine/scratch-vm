@@ -1,19 +1,20 @@
-const {IRGenerator} = require('./irgen');
-const JSGenerator = require('./jsgen');
-const {IROptimizer} = require('./iroptimizer');
+// @ts-check
 
-const compile = thread => {
+const {IRGenerator} = require('./irgen');
+const {IROptimizer} = require('./iroptimizer');
+const JSGenerator = require('./jsgen');
+
+const compile = (/** @type {import("../engine/thread")} */ thread) => {
     const irGenerator = new IRGenerator(thread);
     const ir = irGenerator.generate();
-    
-    // Apply IR optimizations
-    const optimizer = new IROptimizer(ir);
-    optimizer.optimize();
+
+    const irOptimizer = new IROptimizer(ir);
+    irOptimizer.optimize();
 
     const procedures = {};
     const target = thread.target;
 
-    const compileScript = script => {
+    const compileScript = (/** @type {import("./intermediate").IntermediateScript} */ script) => {
         if (script.cachedCompileResult) {
             return script.cachedCompileResult;
         }
