@@ -3,5 +3,11 @@
 
 module.exports = {
     name: '02Engine',
-    url: 'https://02engine.02studio.xyz/'
+    url: 'https://02engine.02studio.xyz/',
+    // Git related settings will be stored here
+    git: {
+        repository: null, // Format: "owner/repo"
+        lastCommit: null,
+        lastFetch: null
+    }
 };

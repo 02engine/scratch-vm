@@ -714,6 +714,17 @@ class VirtualMachine extends EventEmitter {
         // Clear the current runtime
         this.clear();
 
+        // Clear Git data when loading new project to prevent data from previous project
+        if (this.runtime && this.runtime.platform && this.runtime.platform.git) {
+            console.log('[Git] Clearing platform.git data before loading new project');
+            this.runtime.platform.git = {
+                repository: null,
+                lastCommit: null,
+                lastFetch: null
+            };
+            console.log('[Git] Platform.git data cleared:', this.runtime.platform.git);
+        }
+
         if (typeof performance !== 'undefined') {
             performance.mark('scratch-vm-deserialize-start');
         }
