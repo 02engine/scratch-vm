@@ -1171,10 +1171,21 @@ class JSGenerator {
      * @returns {Function} The factory function for the script.
      */
     compile () {
-        if (this.script.stack) {
-            this.descendStack(this.script.stack, new Frame(false));
+        // Check for custom JavaScript code
+        if (this.script.customCode) {
+            // Use custom code directly as the script body
+            this.source = this.script.customCode;
+            // Ensure yields flag is set if custom code contains yield keyword
+            if (this.script.customCode.includes('yield')) {
+                this.script.yields = true;
+            }
+        } else {
+            // Normal compilation path
+            if (this.script.stack) {
+                this.descendStack(this.script.stack, new Frame(false));
+            }
+            this.stopScript();
         }
-        this.stopScript();
 
         const factory = this.createScriptFactory();
         const fn = jsexecute.scopedEval(factory);

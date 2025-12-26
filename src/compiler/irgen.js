@@ -1320,8 +1320,25 @@ class ScriptTreeGenerator {
         }
 
         const text = comment.text;
+        const lines = text.split('\n');
+        let inCodeBlock = false;
+        let codeLines = [];
 
-        for (const line of text.split('\n')) {
+        for (const line of lines) {
+            if (line.startsWith('#code')) {
+                inCodeBlock = true;
+                // Add the rest of this line after #code
+                const afterCode = line.substring(5).trimStart();
+                if (afterCode) {
+                    codeLines.push(afterCode);
+                }
+                continue;
+            }
+            if (inCodeBlock) {
+                codeLines.push(line);
+                continue;
+            }
+            // Existing tw flag handling
             if (!/^tw\b/.test(line)) {
                 continue;
             }
@@ -1339,6 +1356,15 @@ class ScriptTreeGenerator {
 
             // Only the first 'tw' line is parsed.
             break;
+        }
+
+        if (inCodeBlock) {
+            // Join lines with newline
+            this.script.customCode = codeLines.join('\n');
+            // Optionally set yields based on presence of yield keyword
+            if (this.script.customCode.includes('yield')) {
+                this.script.yields = true;
+            }
         }
     }
 
