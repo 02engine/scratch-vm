@@ -1141,6 +1141,28 @@ class JSGenerator {
             script += `const ${varName} = ${varValue};\n`;
         }
 
+        // Add block function definition for custom code
+        if (this.script.customCode) {
+                // For generator scripts, block is a proxy object that returns generator functions
+                script += `
+// Block object for executing Scratch primitives in generator context
+const block = new Proxy({}, {
+    get(target, prop) {
+        if (typeof prop !== 'string') {
+            return undefined;
+        }
+        
+        return function(inputs = {}, context = {target: target}) {
+            const blockFunction = runtime.getOpcodeFunction(prop);
+            
+            return blockFunction(inputs, context);
+        };
+    }
+});
+`;
+            
+        }
+
         // Generated script
         script += 'return ';
         if (this.script.yields) {
