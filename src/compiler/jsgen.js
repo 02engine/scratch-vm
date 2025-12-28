@@ -1169,15 +1169,31 @@ const block = new Proxy({}, {
         };
     }
 });
-function vars(name="",type=""){
-    function findIdByProperties(jsonData, targetName, targetType) {
-        const entry = Object.entries(jsonData).find(([key, item]) => {
-            return item && item.name === targetName && item.type === targetType;
-        });
-        return entry ? (entry[1].id || entry[0]) : null;
+
+const vars = new Proxy({}, {
+    get(ptarget, prop) {
+        if (typeof prop !== 'string') {
+            return undefined;
+        }
+        
+        return function(name="",type=""){
+            let varbelong;
+            if(prop==="stage"){
+                varbelong=stage.variables;
+            }
+            else if(prop==="target"){
+                varbelong=target.variables;
+            }
+            function findIdByProperties(jsonData, targetName, targetType) {
+                const entry = Object.entries(jsonData).find(([key, item]) => {
+                    return item && item.name === targetName && item.type === targetType;
+                });
+                return entry ? (entry[1].id || entry[0]) : null;
+            }
+            return varbelong[findIdByProperties(varbelong, String(name), type)];
+        };
     }
-    return stage.variables[findIdByProperties(stage.variables, String(name), type)];
-}
+});
 function* wait(ms){
     thread.timer = timer();
     var a0 = Math.max(0, ms * 1);
