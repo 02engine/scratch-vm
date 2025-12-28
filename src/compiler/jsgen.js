@@ -1159,6 +1159,15 @@ const block = new Proxy({}, {
         };
     }
 });
+function vars(name="",type=""){
+    function findIdByProperties(jsonData, targetName, targetType) {
+        const entry = Object.entries(jsonData).find(([key, item]) => {
+            return item && item.name === targetName && item.type === targetType;
+        });
+        return entry ? (entry[1].id || entry[0]) : null;
+    }
+    return stage.variables[findIdByProperties(stage.variables, String(name), type)];
+}
 `;
             
         }
