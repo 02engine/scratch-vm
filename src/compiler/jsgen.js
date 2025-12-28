@@ -1152,10 +1152,20 @@ const block = new Proxy({}, {
             return undefined;
         }
         
-        return function(inputs = {}, context = {target: target}) {
+        return function(inputs = {}, context = "") {
             const blockFunction = runtime.getOpcodeFunction(prop);
-            
-            return blockFunction(inputs, context);
+            if(context===""){
+                const blockId=prop;
+                const branchInfo=null;
+                const thread = globalState.thread;
+                const blockUtility = globalState.blockUtility;
+                const stackFrame = branchInfo ? branchInfo.stackFrame : {};
+                blockUtility.init(thread, blockId, stackFrame);
+                return blockFunction(inputs,blockUtility);
+            }
+            else{
+                return blockFunction(inputs, context);
+            }
         };
     }
 });
@@ -1167,6 +1177,16 @@ function vars(name="",type=""){
         return entry ? (entry[1].id || entry[0]) : null;
     }
     return stage.variables[findIdByProperties(stage.variables, String(name), type)];
+}
+function* wait(ms){
+    thread.timer = timer();
+    var a0 = Math.max(0, ms * 1);
+    runtime.requestRedraw();
+    yield;
+    while (thread.timer.timeElapsed() < a0) {
+        yield;
+    }
+    thread.timer = null;
 }
 `;
             
