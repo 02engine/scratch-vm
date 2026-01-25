@@ -1529,20 +1529,16 @@ const deserialize = async function (json, runtime, zip, isSingleSprite) {
 
     // Restore platform data from meta.platform, including git information
     if (json.meta && json.meta.platform) {
-        console.log('[Git] Restoring platform data from SB3 meta:', json.meta.platform);
         // eslint-disable-next-line require-atomic-updates
         runtime.platform = Object.assign({}, runtime.platform, json.meta.platform);
-        console.log('[Git] Updated runtime.platform:', runtime.platform);
     } else {
         // If no platform data in meta, reset git data to defaults
-        console.log('[Git] No platform data in SB3 meta, resetting git data to defaults');
         // eslint-disable-next-line require-atomic-updates
         runtime.platform.git = {
             repository: null,
             lastCommit: null,
             lastFetch: null
         };
-        console.log('[Git] Reset runtime.platform.git to defaults:', runtime.platform.git);
     }
 
     // Extract custom extension IDs, if they exist.

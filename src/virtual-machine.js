@@ -6,7 +6,6 @@ if (typeof TextEncoder === 'undefined') {
 }
 const EventEmitter = require('events');
 const JSZip = require('@turbowarp/jszip');
-
 const Buffer = require('buffer').Buffer;
 const centralDispatch = require('./dispatch/central-dispatch');
 const ExtensionManager = require('./extension-support/extension-manager');
@@ -716,13 +715,11 @@ class VirtualMachine extends EventEmitter {
 
         // Clear Git data when loading new project to prevent data from previous project
         if (this.runtime && this.runtime.platform && this.runtime.platform.git) {
-            console.log('[Git] Clearing platform.git data before loading new project');
             this.runtime.platform.git = {
                 repository: null,
                 lastCommit: null,
                 lastFetch: null
             };
-            console.log('[Git] Platform.git data cleared:', this.runtime.platform.git);
         }
 
         if (typeof performance !== 'undefined') {
