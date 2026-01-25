@@ -47,6 +47,7 @@
     "format-message": "6.2.1",
     "htmlparser2": "3.10.0",
     "immutable": "3.8.2",
+    "jsdom": "^25.0.1",
     "scratch-parser": "github:02engine/scratch-parser#main",
     "scratch-sb1-converter": "github:02engine/scratch-sb1-converter#main",
     "scratch-translate-extension-languages": "github:02engine/scratch-translate-extension-languages#main",
