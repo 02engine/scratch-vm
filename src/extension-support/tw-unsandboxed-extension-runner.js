@@ -4,6 +4,17 @@ const AsyncLimiter = require('../util/async-limiter');
 const createTranslate = require('./tw-l10n');
 const staticFetch = require('../util/tw-static-fetch');
 
+// 尝试导入Node.js环境的依赖
+let JSDOM, nodeFetch;
+try {
+    // 动态导入，避免在浏览器环境中出错
+    JSDOM = require('jsdom').JSDOM;
+    nodeFetch = require('node-fetch');
+} catch (error) {
+    // 在浏览器环境中这些模块可能不可用
+    console.debug('Node.js modules not available, running in browser environment');
+}
+
 /* eslint-disable require-await */
 
 /**
@@ -172,12 +183,12 @@ const teardownUnsandboxedExtensionAPI = () => {
 };
 
 /**
- * Load an unsandboxed extension from an arbitrary URL. This is dangerous.
+ * 浏览器环境的加载函数
  * @param {string} extensionURL
- * @param {Virtualmachine} vm
- * @returns {Promise<object[]>} Resolves with a list of extension objects if the extension was loaded successfully.
+ * @param {VirtualMachine} vm
+ * @returns {Promise<object[]>}
  */
-const loadUnsandboxedExtension = (extensionURL, vm) => new Promise((resolve, reject) => {
+const loadUnsandboxedExtensionBrowser = (extensionURL, vm) => new Promise((resolve, reject) => {
     setupUnsandboxedExtensionAPI(vm).then(resolve);
 
     const script = document.createElement('script');
@@ -190,6 +201,72 @@ const loadUnsandboxedExtension = (extensionURL, vm) => new Promise((resolve, rej
     teardownUnsandboxedExtensionAPI();
     return objects;
 });
+
+/**
+ * Node.js环境的加载函数
+ * @param {string} extensionURL
+ * @param {VirtualMachine} vm
+ * @returns {Promise<object[]>}
+ */
+const loadUnsandboxedExtensionNode = async (extensionURL, vm) => {
+    // 检查是否已设置全局document对象
+    if (!global.document && JSDOM) {
+        // 模拟浏览器环境核心对象
+        const dom = new JSDOM('<!DOCTYPE html><body></body>');
+        global.document = dom.window.document;
+        global.window = dom.window;
+        global.location = dom.window.location;
+        global.fetch = nodeFetch; // 使用node-fetch替换浏览器fetch
+    } else if (!global.document) {
+        throw new Error('Document object not available. Running in Node.js environment requires jsdom package.');
+    }
+
+    // 初始化扩展API并等待注册回调
+    const extensionObjectsPromise = setupUnsandboxedExtensionAPI(vm);
+
+    try {
+        // 用node-fetch下载扩展脚本
+        const response = await fetch(extensionURL);
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        const scriptCode = await response.text();
+
+        // 在模拟的window环境中执行脚本
+        // 使用eval或vm.runInContext取决于安全性要求
+        // 这里使用window.eval确保在正确的上下文中执行
+        if (global.window && global.window.eval) {
+            global.window.eval(scriptCode);
+        } else {
+            // 降级方案
+            eval(scriptCode); // eslint-disable-line no-eval
+        }
+    } catch (err) {
+        throw new Error(`Error loading unsandboxed extension ${extensionURL}: ${err.message}`);
+    }
+
+    // 获取注册的扩展对象并清理
+    const objects = await extensionObjectsPromise;
+    teardownUnsandboxedExtensionAPI();
+    return objects;
+};
+
+/**
+ * 自动检测环境并选择合适的加载方法
+ * Load an unsandboxed extension from an arbitrary URL. This is dangerous.
+ * @param {string} extensionURL
+ * @param {VirtualMachine} vm
+ * @returns {Promise<object[]>} Resolves with a list of extension objects if the extension was loaded successfully.
+ */
+const loadUnsandboxedExtension = (extensionURL, vm) => {
+    // 检测环境：如果存在document对象且具有createElement方法，则使用浏览器方法
+    if (typeof document !== 'undefined' && document.createElement) {
+        return loadUnsandboxedExtensionBrowser(extensionURL, vm);
+    }
+    
+    // 否则使用Node.js方法
+    return loadUnsandboxedExtensionNode(extensionURL, vm);
+};
 
 // Because loading unsandboxed extensions requires messing with global state (global.Scratch),
 // only let one extension load at a time.
