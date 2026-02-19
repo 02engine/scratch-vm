@@ -19,7 +19,7 @@ const formatMessage = require('format-message');
 
 const Variable = require('./engine/variable');
 const newBlockIds = require('./util/new-block-ids');
-const AIBlockGenerator = require('./engine/ai-block-generator');
+const AIBlockGenerator = require('./engine/block-generator');
 
 const {loadCostume} = require('./import/load-costume.js');
 const {loadSound} = require('./import/load-sound.js');
