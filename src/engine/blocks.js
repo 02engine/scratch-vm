@@ -9,7 +9,7 @@ const BlocksRuntimeCache = require('./blocks-runtime-cache');
 const log = require('../util/log');
 const Variable = require('./variable');
 const getMonitorIdForBlockWithArgs = require('../util/get-monitor-id');
-const AIBlockDecider = require('./ai-block-decider');
+const BlockDecider = require('./block-decider');
 
 /**
  * @fileoverview
@@ -28,10 +28,10 @@ class Blocks {
         this.runtime = runtime;
 
         /**
-         * AI Block Decider middleware
-         * @type {AIBlockDecider}
+         * Block Decider middleware
+         * @type {BlockDecider}
          */
-        this.aiBlockDecider = new AIBlockDecider();
+        this.blockDecider = new BlockDecider();
 
         /**
          * All blocks in the workspace.
@@ -411,11 +411,11 @@ class Blocks {
             return;
         }
 
-        // AI middleware: Process event through AI decider
-        // This allows AI to intercept, modify, or generate new events
-        const processedEvents = this.aiBlockDecider.process(e, this);
+        // Middleware: Process event through decider
+        // This allows external systems to intercept, modify, or generate new events
+        const processedEvents = this.blockDecider.process(e, this);
         if (!Array.isArray(processedEvents) || processedEvents.length === 0) {
-            return; // AI rejected the event
+            return; // Event rejected
         }
 
         // Process all events (original or AI-generated)

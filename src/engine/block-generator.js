@@ -1,16 +1,16 @@
 /**
  * @fileoverview
- * AI Block Generator - Public API for generating block events from GUI
+ * Block Generator - Public API for generating block events from GUI
  * Provides a simple interface to create, delete, move, and modify blocks
  */
 
-const AIBlockDecider = require('./ai-block-decider');
+const BlockDecider = require('./block-decider');
 
 /**
- * AI Block Generator class
+ * Block Generator class
  * Provides public methods to generate block operations
  */
-class AIBlockGenerator {
+class BlockGenerator {
     /**
      * @param {Runtime} runtime The Scratch runtime
      */
@@ -44,7 +44,7 @@ class AIBlockGenerator {
             blockId = this._generateBlockId()
         } = options;
 
-        const event = AIBlockDecider.createBlockEvent(
+        const event = BlockDecider.createBlockEvent(
             blockId,
             opcode,
             fields,
@@ -68,7 +68,7 @@ class AIBlockGenerator {
             throw new Error(`Target with ID ${targetId} not found`);
         }
 
-        const event = AIBlockDecider.deleteBlockEvent(blockId);
+        const event = BlockDecider.deleteBlockEvent(blockId);
         target.blocks.blocklyListen(event);
     }
 
@@ -93,7 +93,7 @@ class AIBlockGenerator {
             coordinates = null
         } = options;
 
-        const event = AIBlockDecider.moveBlockEvent(
+        const event = BlockDecider.moveBlockEvent(
             blockId,
             parentId,
             inputName,
@@ -116,7 +116,7 @@ class AIBlockGenerator {
             throw new Error(`Target with ID ${targetId} not found`);
         }
 
-        const event = AIBlockDecider.changeFieldEvent(blockId, fieldName, newValue);
+        const event = BlockDecider.changeFieldEvent(blockId, fieldName, newValue);
         target.blocks.blocklyListen(event);
     }
 
@@ -155,37 +155,37 @@ class AIBlockGenerator {
     }
 
     /**
-     * Enable AI decision making for a target
+     * Enable decision making for a target
      * @param {string} targetId Target ID
      * @param {Function} decisionHandler Custom decision handler
      */
-    enableAI (targetId, decisionHandler) {
+    enable (targetId, decisionHandler) {
         const target = this.runtime.getTargetById(targetId);
         if (!target) {
             throw new Error(`Target with ID ${targetId} not found`);
         }
 
-        target.blocks.aiBlockDecider.enable();
+        target.blocks.blockDecider.enable();
         if (decisionHandler) {
-            target.blocks.aiBlockDecider.setDecisionHandler(decisionHandler);
+            target.blocks.blockDecider.setDecisionHandler(decisionHandler);
         }
     }
 
     /**
-     * Disable AI decision making for a target
+     * Disable decision making for a target
      * @param {string} targetId Target ID
      */
-    disableAI (targetId) {
+    disable (targetId) {
         const target = this.runtime.getTargetById(targetId);
         if (!target) {
             throw new Error(`Target with ID ${targetId} not found`);
         }
 
-        target.blocks.aiBlockDecider.disable();
+        target.blocks.blockDecider.disable();
     }
 
     /**
-     * Get AI event history for a target
+     * Get event history for a target
      * @param {string} targetId Target ID
      * @return {Array<object>} Event history
      */
@@ -195,11 +195,11 @@ class AIBlockGenerator {
             throw new Error(`Target with ID ${targetId} not found`);
         }
 
-        return target.blocks.aiBlockDecider.eventHistory;
+        return target.blocks.blockDecider.eventHistory;
     }
 
     /**
-     * Clear AI event history for a target
+     * Clear event history for a target
      * @param {string} targetId Target ID
      */
     clearEventHistory (targetId) {
@@ -208,7 +208,7 @@ class AIBlockGenerator {
             throw new Error(`Target with ID ${targetId} not found`);
         }
 
-        target.blocks.aiBlockDecider.clearHistory();
+        target.blocks.blockDecider.clearHistory();
     }
 
     /**
@@ -217,8 +217,8 @@ class AIBlockGenerator {
      * @private
      */
     _generateBlockId () {
-        return `ai_block_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        return `block_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     }
 }
 
-module.exports = AIBlockGenerator;
+module.exports = BlockGenerator;

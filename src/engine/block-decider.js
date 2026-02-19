@@ -1,14 +1,14 @@
 /**
  * @fileoverview
- * AI Block Decider - Middleware layer for intercepting and modifying block operations.
- * Allows AI to simulate user actions: create, delete, move, and modify blocks.
+ * Block Decider - Middleware layer for intercepting and modifying block operations.
+ * Allows external systems to simulate user actions: create, delete, move, and modify blocks.
  */
 
 /**
- * AI Block Decider class
- * Provides hooks for AI to intercept and modify block operations
+ * Block Decider class
+ * Provides hooks for external systems to intercept and modify block operations
  */
-class AIBlockDecider {
+class BlockDecider {
     constructor () {
         /**
          * Whether AI decision making is enabled
@@ -134,7 +134,7 @@ class AIBlockDecider {
      * @return {object} Synthetic create event
      */
     static createBlockEvent (blockId, opcode, fields = {}, inputs = {}, topLevel = true, coordinates = null) {
-        const xml = AIBlockDecider._buildBlockXML(blockId, opcode, fields, inputs, coordinates);
+        const xml = BlockDecider._buildBlockXML(blockId, opcode, fields, inputs, coordinates);
         return {
             type: 'create',
             blockId: blockId,
@@ -227,4 +227,4 @@ class AIBlockDecider {
     }
 }
 
-module.exports = AIBlockDecider;
+module.exports = BlockDecider;
