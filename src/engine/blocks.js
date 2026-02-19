@@ -9,6 +9,7 @@ const BlocksRuntimeCache = require('./blocks-runtime-cache');
 const log = require('../util/log');
 const Variable = require('./variable');
 const getMonitorIdForBlockWithArgs = require('../util/get-monitor-id');
+const AIBlockDecider = require('./ai-block-decider');
 
 /**
  * @fileoverview
@@ -25,6 +26,12 @@ const getMonitorIdForBlockWithArgs = require('../util/get-monitor-id');
 class Blocks {
     constructor (runtime, optNoGlow) {
         this.runtime = runtime;
+
+        /**
+         * AI Block Decider middleware
+         * @type {AIBlockDecider}
+         */
+        this.aiBlockDecider = new AIBlockDecider();
 
         /**
          * All blocks in the workspace.
@@ -397,6 +404,32 @@ class Blocks {
      * @param {object} e Blockly "block" or "variable" event
      */
     blocklyListen (e) {
+        // Validate event
+        if (typeof e !== 'object') return;
+        if (typeof e.blockId !== 'string' && typeof e.varId !== 'string' &&
+            typeof e.commentId !== 'string') {
+            return;
+        }
+
+        // AI middleware: Process event through AI decider
+        // This allows AI to intercept, modify, or generate new events
+        const processedEvents = this.aiBlockDecider.process(e, this);
+        if (!Array.isArray(processedEvents) || processedEvents.length === 0) {
+            return; // AI rejected the event
+        }
+
+        // Process all events (original or AI-generated)
+        for (const event of processedEvents) {
+            this._processBlocklyEvent(event);
+        }
+    }
+
+    /**
+     * Internal method to process a single Blockly event
+     * @param {object} e Blockly event
+     * @private
+     */
+    _processBlocklyEvent (e) {
         // Validate event
         if (typeof e !== 'object') return;
         if (typeof e.blockId !== 'string' && typeof e.varId !== 'string' &&

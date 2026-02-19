@@ -19,6 +19,7 @@ const formatMessage = require('format-message');
 
 const Variable = require('./engine/variable');
 const newBlockIds = require('./util/new-block-ids');
+const AIBlockGenerator = require('./engine/ai-block-generator');
 
 const {loadCostume} = require('./import/load-costume.js');
 const {loadSound} = require('./import/load-sound.js');
@@ -215,6 +216,12 @@ class VirtualMachine extends EventEmitter {
         this.flyoutBlockListener = this.flyoutBlockListener.bind(this);
         this.monitorBlockListener = this.monitorBlockListener.bind(this);
         this.variableListener = this.variableListener.bind(this);
+
+        /**
+         * AI Block Generator for creating/modifying blocks from GUI
+         * @type {AIBlockGenerator}
+         */
+        this.aiBlockGenerator = new AIBlockGenerator(this.runtime);
 
         /**
          * Export some internal classes for extensions.
