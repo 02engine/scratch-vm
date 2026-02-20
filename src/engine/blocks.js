@@ -9,7 +9,6 @@ const BlocksRuntimeCache = require('./blocks-runtime-cache');
 const log = require('../util/log');
 const Variable = require('./variable');
 const getMonitorIdForBlockWithArgs = require('../util/get-monitor-id');
-const BlockDecider = require('./block-decider');
 
 /**
  * @fileoverview
@@ -26,12 +25,6 @@ const BlockDecider = require('./block-decider');
 class Blocks {
     constructor (runtime, optNoGlow) {
         this.runtime = runtime;
-
-        /**
-         * Block Decider middleware
-         * @type {BlockDecider}
-         */
-        this.blockDecider = new BlockDecider();
 
         /**
          * All blocks in the workspace.
@@ -404,32 +397,6 @@ class Blocks {
      * @param {object} e Blockly "block" or "variable" event
      */
     blocklyListen (e) {
-        // Validate event
-        if (typeof e !== 'object') return;
-        if (typeof e.blockId !== 'string' && typeof e.varId !== 'string' &&
-            typeof e.commentId !== 'string') {
-            return;
-        }
-
-        // Middleware: Process event through decider
-        // This allows external systems to intercept, modify, or generate new events
-        const processedEvents = this.blockDecider.process(e, this);
-        if (!Array.isArray(processedEvents) || processedEvents.length === 0) {
-            return; // Event rejected
-        }
-
-        // Process all events (original or AI-generated)
-        for (const event of processedEvents) {
-            this._processBlocklyEvent(event);
-        }
-    }
-
-    /**
-     * Internal method to process a single Blockly event
-     * @param {object} e Blockly event
-     * @private
-     */
-    _processBlocklyEvent (e) {
         // Validate event
         if (typeof e !== 'object') return;
         if (typeof e.blockId !== 'string' && typeof e.varId !== 'string' &&
