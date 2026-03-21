@@ -127,6 +127,130 @@ class JSGenerator {
         this.debug = this.target.runtime.debug;
 
         this.oldCompilerStub = new oldCompilerCompatibility.JSGeneratorStub(this);
+
+        /**
+         * Track which extensions are used for caching
+         * @type {Object.<string, boolean>}
+         */
+        this.usedExtensions = {
+            motion: false,
+            looks: false,
+            sensing: false,
+            control: false,
+            pen: false,
+            operators: false
+        };
+    }
+
+    /**
+     * Check if an input is a numeric constant
+     * @param {IntermediateInput} input
+     * @returns {boolean}
+     */
+    isNumericConstant (input) {
+        return input.opcode === InputOpcode.CONSTANT && input.isAlwaysType(InputType.NUMBER);
+    }
+
+    /**
+     * Get the numeric value of a constant input
+     * @param {IntermediateInput} input
+     * @returns {number}
+     */
+    getConstantNumber (input) {
+        return input.inputs.value;
+    }
+
+    /**
+     * Format a number for JS output, handling special cases
+     * @param {number} value
+     * @returns {string}
+     */
+    formatNumber (value) {
+        if (Object.is(value, -0)) return '-0';
+        if (Object.is(value, Infinity)) return 'Infinity';
+        if (Object.is(value, -Infinity)) return '-Infinity';
+        if (Number.isNaN(value)) return 'NaN';
+        return value.toString();
+    }
+
+    /**
+     * Try to fold a binary arithmetic operation at compile time
+     * @param {IntermediateInput} left
+     * @param {IntermediateInput} right
+     * @param {string} op - The operation: '+', '-', '*', '/'
+     * @returns {string|null} - The folded result or null if not foldable
+     */
+    tryFoldBinaryOp (left, right, op) {
+        if (!this.isNumericConstant(left) || !this.isNumericConstant(right)) {
+            return null;
+        }
+
+        const leftVal = this.getConstantNumber(left);
+        const rightVal = this.getConstantNumber(right);
+        let result;
+
+        switch (op) {
+        case '+': result = leftVal + rightVal; break;
+        case '-': result = leftVal - rightVal; break;
+        case '*': result = leftVal * rightVal; break;
+        case '/': result = leftVal / rightVal; break;
+        default: return null;
+        }
+
+        return this.formatNumber(result);
+    }
+
+    /**
+     * Try to fold a math function at compile time
+     * @param {IntermediateInput} input
+     * @param {string} fn - The function name
+     * @returns {string|null} - The folded result or null if not foldable
+     */
+    tryFoldMathFn (input, fn) {
+        if (!this.isNumericConstant(input)) {
+            return null;
+        }
+
+        const val = this.getConstantNumber(input);
+        let result;
+
+        switch (fn) {
+        case 'abs': result = Math.abs(val); break;
+        case 'floor': result = Math.floor(val); break;
+        case 'ceil': result = Math.ceil(val); break;
+        case 'round': result = Math.round(val); break;
+        case 'sqrt': result = Math.sqrt(val); break;
+        case 'sin': {
+            const radians = (Math.PI * val) / 180;
+            result = Math.round(Math.sin(radians) * 1e10) / 1e10;
+            break;
+        }
+        case 'cos': {
+            const radians = (Math.PI * val) / 180;
+            result = Math.round(Math.cos(radians) * 1e10) / 1e10;
+            break;
+        }
+        case 'tan': {
+            const mod = val % 360;
+            if (mod === 90 || mod === -270) result = Infinity;
+            else if (mod === 270 || mod === -90) result = -Infinity;
+            else {
+                const radians = (Math.PI * val) / 180;
+                result = Math.round(Math.tan(radians) * 1e10) / 1e10;
+            }
+            break;
+        }
+        case 'asin': result = (Math.asin(val) * 180) / Math.PI; break;
+        case 'acos': result = (Math.acos(val) * 180) / Math.PI; break;
+        case 'atan': result = (Math.atan(val) * 180) / Math.PI; break;
+        case 'ln': result = Math.log(val); break;
+        case 'log10': result = Math.log(val) / Math.LN10; break;
+        case 'exp': result = Math.exp(val); break;
+        case 'pow10': result = Math.pow(10, val); break;
+        default: return null;
+        }
+
+        return this.formatNumber(result);
     }
 
     /**
@@ -178,12 +302,40 @@ class JSGenerator {
         case InputOpcode.ADDON_CALL:
             return `(${this.descendAddonCall(node)})`;
 
-        case InputOpcode.CAST_BOOLEAN:
-            return `toBoolean(${this.descendInput(node.target)})`;
+        case InputOpcode.CAST_BOOLEAN: {
+            const target = node.target;
+            // If already boolean type, no conversion needed
+            if (target.isAlwaysType(InputType.BOOLEAN)) {
+                return this.descendInput(target);
+            }
+            // If known number type, inline the conversion
+            if (target.isAlwaysType(InputType.NUMBER)) {
+                const expr = this.descendInput(target);
+                // Number to boolean: 0 and NaN are false, everything else is true
+                // NaN !== NaN, so we check: val !== 0 && val === val
+                return `(${expr} !== 0 && ${expr} === ${expr})`;
+            }
+            // If known number type that can't be NaN (integers, positive numbers, etc.)
+            if (target.isAlwaysType(InputType.NUMBER_INT | InputType.NUMBER_POS | InputType.NUMBER_NEG | InputType.NUMBER_ZERO)) {
+                const expr = this.descendInput(target);
+                return `(${expr} !== 0)`;
+            }
+            // If known string type, inline the conversion
+            if (target.isAlwaysType(InputType.STRING)) {
+                const expr = this.descendInput(target);
+                return `(${expr} !== '' && ${expr} !== '0' && ${expr}.toLowerCase() !== 'false')`;
+            }
+            return `toBoolean(${this.descendInput(target)})`;
+        }
         case InputOpcode.CAST_NUMBER:
             if (node.target.isAlwaysType(InputType.BOOLEAN_INTERPRETABLE)) {
                 return `(+${this.descendInput(node.target.toType(InputType.BOOLEAN))})`;
             }
+            // If already a number, just return it directly (avoid || 0)
+            if (node.target.isAlwaysType(InputType.NUMBER)) {
+                return this.descendInput(node.target);
+            }
+            // If already number or NaN, just use || 0
             if (node.target.isAlwaysType(InputType.NUMBER_OR_NAN)) {
                 return `(${this.descendInput(node.target)} || 0)`;
             }
@@ -273,26 +425,50 @@ class JSGenerator {
         case InputOpcode.SENSING_MOUSE_Y:
             return 'runtime.ioDevices.mouse.getScratchY()';
 
-        case InputOpcode.OP_ABS:
+        case InputOpcode.OP_ABS: {
+            const folded = this.tryFoldMathFn(node.value, 'abs');
+            if (folded !== null) return folded;
             return `Math.abs(${this.descendInput(node.value)})`;
-        case InputOpcode.OP_ACOS:
+        }
+        case InputOpcode.OP_ACOS: {
+            const folded = this.tryFoldMathFn(node.value, 'acos');
+            if (folded !== null) return folded;
             return `((Math.acos(${this.descendInput(node.value)}) * 180) / Math.PI)`;
-        case InputOpcode.OP_ADD:
+        }
+        case InputOpcode.OP_ADD: {
+            const folded = this.tryFoldBinaryOp(node.left, node.right, '+');
+            if (folded !== null) return folded;
             return `(${this.descendInput(node.left)} + ${this.descendInput(node.right)})`;
+        }
         case InputOpcode.OP_AND:
             return `(${this.descendInput(node.left)} && ${this.descendInput(node.right)})`;
-        case InputOpcode.OP_ASIN:
+        case InputOpcode.OP_ASIN: {
+            const folded = this.tryFoldMathFn(node.value, 'asin');
+            if (folded !== null) return folded;
             return `((Math.asin(${this.descendInput(node.value)}) * 180) / Math.PI)`;
-        case InputOpcode.OP_ATAN:
+        }
+        case InputOpcode.OP_ATAN: {
+            const folded = this.tryFoldMathFn(node.value, 'atan');
+            if (folded !== null) return folded;
             return `((Math.atan(${this.descendInput(node.value)}) * 180) / Math.PI)`;
-        case InputOpcode.OP_CEILING:
+        }
+        case InputOpcode.OP_CEILING: {
+            const folded = this.tryFoldMathFn(node.value, 'ceil');
+            if (folded !== null) return folded;
             return `Math.ceil(${this.descendInput(node.value)})`;
+        }
         case InputOpcode.OP_CONTAINS:
             return `(${this.descendInput(node.string)}.toLowerCase().indexOf(${this.descendInput(node.contains)}.toLowerCase()) !== -1)`;
-        case InputOpcode.OP_COS:
+        case InputOpcode.OP_COS: {
+            const folded = this.tryFoldMathFn(node.value, 'cos');
+            if (folded !== null) return folded;
             return `(Math.round(Math.cos((Math.PI * ${this.descendInput(node.value)}) / 180) * 1e10) / 1e10)`;
-        case InputOpcode.OP_DIVIDE:
+        }
+        case InputOpcode.OP_DIVIDE: {
+            const folded = this.tryFoldBinaryOp(node.left, node.right, '/');
+            if (folded !== null) return folded;
             return `(${this.descendInput(node.left)} / ${this.descendInput(node.right)})`;
+        }
         case InputOpcode.OP_EQUALS: {
             const left = node.left;
             const right = node.right;
@@ -312,10 +488,16 @@ class JSGenerator {
             // No compile-time optimizations possible - use fallback method.
             return `compareEqual(${this.descendInput(left)}, ${this.descendInput(right)})`;
         }
-        case InputOpcode.OP_POW_E:
+        case InputOpcode.OP_POW_E: {
+            const folded = this.tryFoldMathFn(node.value, 'exp');
+            if (folded !== null) return folded;
             return `Math.exp(${this.descendInput(node.value)})`;
-        case InputOpcode.OP_FLOOR:
+        }
+        case InputOpcode.OP_FLOOR: {
+            const folded = this.tryFoldMathFn(node.value, 'floor');
+            if (folded !== null) return folded;
             return `Math.floor(${this.descendInput(node.value)})`;
+        }
         case InputOpcode.OP_GREATER: {
             const left = node.left;
             const right = node.right;
@@ -358,15 +540,24 @@ class JSGenerator {
         }
         case InputOpcode.OP_LETTER_OF:
             return `((${this.descendInput(node.string)})[${this.descendInput(node.letter)} - 1] || "")`;
-        case InputOpcode.OP_LOG_E:
+        case InputOpcode.OP_LOG_E: {
+            const folded = this.tryFoldMathFn(node.value, 'ln');
+            if (folded !== null) return folded;
             return `Math.log(${this.descendInput(node.value)})`;
-        case InputOpcode.OP_LOG_10:
+        }
+        case InputOpcode.OP_LOG_10: {
+            const folded = this.tryFoldMathFn(node.value, 'log10');
+            if (folded !== null) return folded;
             return `(Math.log(${this.descendInput(node.value)}) / Math.LN10)`;
+        }
         case InputOpcode.OP_MOD:
             this.descendedIntoModulo = true;
             return `mod(${this.descendInput(node.left)}, ${this.descendInput(node.right)})`;
-        case InputOpcode.OP_MULTIPLY:
+        case InputOpcode.OP_MULTIPLY: {
+            const folded = this.tryFoldBinaryOp(node.left, node.right, '*');
+            if (folded !== null) return folded;
             return `(${this.descendInput(node.left)} * ${this.descendInput(node.right)})`;
+        }
         case InputOpcode.OP_NOT:
             return `!${this.descendInput(node.operand)}`;
         case InputOpcode.OP_OR:
@@ -378,19 +569,38 @@ class JSGenerator {
             if (node.useFloats) {
                 return `randomFloat(${this.descendInput(node.low)}, ${this.descendInput(node.high)})`;
             }
-            return `runtime.ext_scratch3_operators._random(${this.descendInput(node.low)}, ${this.descendInput(node.high)})`;
-        case InputOpcode.OP_ROUND:
+            this.usedExtensions.operators = true;
+            return `operators._random(${this.descendInput(node.low)}, ${this.descendInput(node.high)})`;
+        case InputOpcode.OP_ROUND: {
+            const folded = this.tryFoldMathFn(node.value, 'round');
+            if (folded !== null) return folded;
             return `Math.round(${this.descendInput(node.value)})`;
-        case InputOpcode.OP_SIN:
+        }
+        case InputOpcode.OP_SIN: {
+            const folded = this.tryFoldMathFn(node.value, 'sin');
+            if (folded !== null) return folded;
             return `(Math.round(Math.sin((Math.PI * ${this.descendInput(node.value)}) / 180) * 1e10) / 1e10)`;
-        case InputOpcode.OP_SQRT:
+        }
+        case InputOpcode.OP_SQRT: {
+            const folded = this.tryFoldMathFn(node.value, 'sqrt');
+            if (folded !== null) return folded;
             return `Math.sqrt(${this.descendInput(node.value)})`;
-        case InputOpcode.OP_SUBTRACT:
+        }
+        case InputOpcode.OP_SUBTRACT: {
+            const folded = this.tryFoldBinaryOp(node.left, node.right, '-');
+            if (folded !== null) return folded;
             return `(${this.descendInput(node.left)} - ${this.descendInput(node.right)})`;
-        case InputOpcode.OP_TAN:
+        }
+        case InputOpcode.OP_TAN: {
+            const folded = this.tryFoldMathFn(node.value, 'tan');
+            if (folded !== null) return folded;
             return `tan(${this.descendInput(node.value)})`;
-        case InputOpcode.OP_POW_10:
+        }
+        case InputOpcode.OP_POW_10: {
+            const folded = this.tryFoldMathFn(node.value, 'pow10');
+            if (folded !== null) return folded;
             return `(10 ** ${this.descendInput(node.value)})`;
+        }
 
         case InputOpcode.PROCEDURE_CALL: {
             const procedureCode = node.code;
@@ -424,7 +634,8 @@ class JSGenerator {
             return `${procedureReference}(${joinedArgs})`;
         }
         case InputOpcode.SENSING_ANSWER:
-            return `runtime.ext_scratch3_sensing._answer`;
+            this.usedExtensions.sensing = true;
+            return 'sensing._answer';
         case InputOpcode.SENSING_COLOR_TOUCHING_COLOR:
             return `target.colorIsTouchingColor(${this.descendInput(node.target)}, ${this.descendInput(node.mask)})`;
         case InputOpcode.SENSING_TIME_DATE:
@@ -443,7 +654,8 @@ class JSGenerator {
         case InputOpcode.SENSING_TIME_MONTH:
             return `(new Date().getMonth() + 1)`;
         case InputOpcode.SENSING_OF:
-            return `runtime.ext_scratch3_sensing.getAttributeOf({OBJECT: ${this.descendInput(node.object)}, PROPERTY: "${sanitize(node.property)}" })`;
+            this.usedExtensions.sensing = true;
+            return `sensing.getAttributeOf({OBJECT: ${this.descendInput(node.object)}, PROPERTY: "${sanitize(node.property)}" })`;
         case InputOpcode.SENSING_OF_VOLUME: {
             const targetRef = this.descendTargetReference(node.object);
             return `(${targetRef} ? ${targetRef}.volume : 0)`;
@@ -488,7 +700,8 @@ class JSGenerator {
             return 'runtime.ioDevices.clock.projectTimer()';
 
         case InputOpcode.CONTROL_COUNTER:
-            return 'runtime.ext_scratch3_control._counter';
+            this.usedExtensions.control = true;
+            return 'control._counter';
 
         case InputOpcode.TW_KEY_LAST_PRESSED:
             return 'runtime.ioDevices.keyboard.getLastKeyPressed()';
@@ -577,7 +790,8 @@ class JSGenerator {
             break;
 
         case StackOpcode.CONTROL_CLONE_CREATE:
-            this.source += `runtime.ext_scratch3_control._createClone(${this.descendInput(node.target)}, target);\n`;
+            this.usedExtensions.control = true;
+            this.source += `control._createClone(${this.descendInput(node.target)}, target);\n`;
             break;
         case StackOpcode.CONTROL_CLONE_DELETE:
             this.source += 'if (!target.isOriginal) {\n';
@@ -609,6 +823,23 @@ class JSGenerator {
             this.source += `}\n`;
             break;
         case StackOpcode.CONTROL_REPEAT: {
+            // Check if we can unroll the loop (small constant iterations)
+            const MAX_UNROLL_ITERATIONS = 3;
+            if (node.times.isAlwaysType(InputType.NUMBER_INT) &&
+                node.times.opcode === InputOpcode.CONSTANT &&
+                node.times.inputs.value > 0 &&
+                node.times.inputs.value <= MAX_UNROLL_ITERATIONS &&
+                !this.warpTimer && // Don't unroll if warp timer is needed
+                node.do.blocks.length > 0) {
+                // Unroll the loop
+                const iterations = Math.floor(node.times.inputs.value);
+                for (let iter = 0; iter < iterations; iter++) {
+                    this.descendStack(node.do, new Frame(false));
+                }
+                break;
+            }
+
+            // Normal loop generation
             const i = this.localVariables.next();
             if (node.times.isAlwaysType(InputType.NUMBER_INT | InputType.NUMBER_INF)) {
                 this.source += `for (var ${i} = ${this.descendInput(node.times)}; ${i} > 0; ${i}--) {\n`;
@@ -660,10 +891,12 @@ class JSGenerator {
             this.source += `}\n`;
             break;
         case StackOpcode.CONTROL_CLEAR_COUNTER:
-            this.source += 'runtime.ext_scratch3_control._counter = 0;\n';
+            this.usedExtensions.control = true;
+            this.source += 'control._counter = 0;\n';
             break;
         case StackOpcode.CONTORL_INCR_COUNTER:
-            this.source += 'runtime.ext_scratch3_control._counter++;\n';
+            this.usedExtensions.control = true;
+            this.source += 'control._counter++;\n';
             break;
 
         case StackOpcode.EVENT_BROADCAST:
@@ -730,7 +963,8 @@ class JSGenerator {
             break;
         case StackOpcode.LOOKS_EFFECT_CHANGE:
             if (Object.prototype.hasOwnProperty.call(this.target.effects, node.effect)) {
-                this.source += `target.setEffect("${sanitize(node.effect)}", runtime.ext_scratch3_looks.clampEffect("${sanitize(node.effect)}", ${this.descendInput(node.value)} + target.effects["${sanitize(node.effect)}"]));\n`;
+                this.usedExtensions.looks = true;
+                this.source += `target.setEffect("${sanitize(node.effect)}", looks.clampEffect("${sanitize(node.effect)}", ${this.descendInput(node.value)} + target.effects["${sanitize(node.effect)}"]));\n`;
             }
             break;
         case StackOpcode.LOOKS_SIZE_CHANGE:
@@ -753,17 +987,20 @@ class JSGenerator {
             break;
         case StackOpcode.LOOKS_HIDE:
             this.source += 'target.setVisible(false);\n';
-            this.source += 'runtime.ext_scratch3_looks._renderBubble(target);\n';
+            this.usedExtensions.looks = true;
+            this.source += 'looks._renderBubble(target);\n';
             break;
         case StackOpcode.LOOKS_BACKDROP_NEXT:
-            this.source += 'runtime.ext_scratch3_looks._setBackdrop(stage, stage.currentCostume + 1, true);\n';
+            this.usedExtensions.looks = true;
+            this.source += 'looks._setBackdrop(stage, stage.currentCostume + 1, true);\n';
             break;
         case StackOpcode.LOOKS_COSTUME_NEXT:
             this.source += 'target.setCostume(target.currentCostume + 1);\n';
             break;
         case StackOpcode.LOOKS_EFFECT_SET:
             if (Object.prototype.hasOwnProperty.call(this.target.effects, node.effect)) {
-                this.source += `target.setEffect("${sanitize(node.effect)}", runtime.ext_scratch3_looks.clampEffect("${sanitize(node.effect)}", ${this.descendInput(node.value)}));\n`;
+                this.usedExtensions.looks = true;
+                this.source += `target.setEffect("${sanitize(node.effect)}", looks.clampEffect("${sanitize(node.effect)}", ${this.descendInput(node.value)}));\n`;
             }
             break;
         case StackOpcode.LOOKS_SIZE_SET:
@@ -771,25 +1008,32 @@ class JSGenerator {
             break;
         case StackOpcode.LOOKS_SHOW:
             this.source += 'target.setVisible(true);\n';
-            this.source += 'runtime.ext_scratch3_looks._renderBubble(target);\n';
+            this.usedExtensions.looks = true;
+            this.source += 'looks._renderBubble(target);\n';
             break;
         case StackOpcode.LOOKS_BACKDROP_SET:
-            this.source += `runtime.ext_scratch3_looks._setBackdrop(stage, ${this.descendInput(node.backdrop)});\n`;
+            this.usedExtensions.looks = true;
+            this.source += `looks._setBackdrop(stage, ${this.descendInput(node.backdrop)});\n`;
             break;
         case StackOpcode.LOOKS_COSTUME_SET:
-            this.source += `runtime.ext_scratch3_looks._setCostume(target, ${this.descendInput(node.costume)});\n`;
+            this.usedExtensions.looks = true;
+            this.source += `looks._setCostume(target, ${this.descendInput(node.costume)});\n`;
             break;
 
         case StackOpcode.MOTION_X_CHANGE:
+            this.usedExtensions.motion = true;
             this.source += `target.setXY(target.x + ${this.descendInput(node.dx)}, target.y);\n`;
             break;
         case StackOpcode.MOTION_Y_CHANGE:
+            this.usedExtensions.motion = true;
             this.source += `target.setXY(target.x, target.y + ${this.descendInput(node.dy)});\n`;
             break;
         case StackOpcode.MOTION_IF_ON_EDGE_BOUNCE:
-            this.source += `runtime.ext_scratch3_motion._ifOnEdgeBounce(target);\n`;
+            this.usedExtensions.motion = true;
+            this.source += `motion._ifOnEdgeBounce(target);\n`;
             break;
         case StackOpcode.MOTION_DIRECTION_SET:
+            this.usedExtensions.motion = true;
             this.source += `target.setDirection(${this.descendInput(node.direction)});\n`;
             break;
         case StackOpcode.MOTION_ROTATION_STYLE_SET:
@@ -808,7 +1052,8 @@ class JSGenerator {
             break;
         }
         case StackOpcode.MOTION_STEP:
-            this.source += `runtime.ext_scratch3_motion._moveSteps(${this.descendInput(node.steps)}, target);\n`;
+            this.usedExtensions.motion = true;
+            this.source += `motion._moveSteps(${this.descendInput(node.steps)}, target);\n`;
             break;
 
         case StackOpcode.NOP:
@@ -1136,6 +1381,27 @@ class JSGenerator {
         script += 'const target = thread.target; ';
         script += 'const runtime = target.runtime; ';
         script += 'const stage = runtime.getTargetForStage();\n';
+
+        // Cache frequently used extensions
+        if (this.usedExtensions.motion) {
+            script += 'const motion = runtime.ext_scratch3_motion;\n';
+        }
+        if (this.usedExtensions.looks) {
+            script += 'const looks = runtime.ext_scratch3_looks;\n';
+        }
+        if (this.usedExtensions.sensing) {
+            script += 'const sensing = runtime.ext_scratch3_sensing;\n';
+        }
+        if (this.usedExtensions.control) {
+            script += 'const control = runtime.ext_scratch3_control;\n';
+        }
+        if (this.usedExtensions.pen) {
+            script += 'const pen = runtime.ext_pen;\n';
+        }
+        if (this.usedExtensions.operators) {
+            script += 'const operators = runtime.ext_scratch3_operators;\n';
+        }
+
         for (const varValue of Object.keys(this._setupVariables)) {
             const varName = this._setupVariables[varValue];
             script += `const ${varName} = ${varValue};\n`;

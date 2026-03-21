@@ -34,7 +34,17 @@ const isStuck = () => {
         return globalState.thread.target.runtime.sequencer.timer.timeElapsed() > 500;
     }
     return false;
-};`;
+};
+
+// Pre-computed sin/cos lookup tables for integer angles (0-359 degrees)
+// Rounded to 10 decimal places for Scratch compatibility
+const sinTable = new Float64Array(360);
+const cosTable = new Float64Array(360);
+for (let i = 0; i < 360; i++) {
+    sinTable[i] = Math.round(Math.sin((Math.PI * i) / 180) * 1e10) / 1e10;
+    cosTable[i] = Math.round(Math.cos((Math.PI * i) / 180) * 1e10) / 1e10;
+}
+`;
 
 /**
  * Start hats by opcode.
@@ -259,7 +269,8 @@ runtimeFunctions.limitPrecision = `const limitPrecision = value => {
  * @param {*} val A value that evaluates to 0 in JS string-to-number conversation such as empty string, 0, or tab.
  * @returns {boolean} True if the value should not be treated as the number zero.
  */
-baseRuntime += `const isNotActuallyZero = val => {
+baseRuntime += `
+const isNotActuallyZero = val => {
     if (typeof val !== 'string') return false;
     for (let i = 0; i < val.length; i++) {
         const code = val.charCodeAt(i);
@@ -276,14 +287,31 @@ baseRuntime += `const isNotActuallyZero = val => {
  * @param {*} v2 Second value
  * @returns {boolean} true if v1 is equal to v2
  */
-baseRuntime += `const compareEqualSlow = (v1, v2) => {
+baseRuntime += `
+const compareEqualSlow = (v1, v2) => {
     const n1 = +v1;
     if (isNaN(n1) || (n1 === 0 && isNotActuallyZero(v1))) return ('' + v1).toLowerCase() === ('' + v2).toLowerCase();
     const n2 = +v2;
     if (isNaN(n2) || (n2 === 0 && isNotActuallyZero(v2))) return ('' + v1).toLowerCase() === ('' + v2).toLowerCase();
     return n1 === n2;
 };
-const compareEqual = (v1, v2) => (typeof v1 === 'number' && typeof v2 === 'number' && !isNaN(v1) && !isNaN(v2) || v1 === v2) ? v1 === v2 : compareEqualSlow(v1, v2);`;
+const compareEqual = (v1, v2) => {
+    // Fast path: same type
+    const t1 = typeof v1;
+    const t2 = typeof v2;
+    if (t1 === 'number' && t2 === 'number') {
+        return v1 === v2;
+    }
+    if (t1 === 'string' && t2 === 'string') {
+        return v1.toLowerCase() === v2.toLowerCase();
+    }
+    if (t1 === 'boolean' && t2 === 'boolean') {
+        return v1 === v2;
+    }
+    // Mixed types or slow path
+    if (t1 === 'number' && t2 === 'number') return v1 === v2;
+    return compareEqualSlow(v1, v2);
+}`;
 
 /**
  * Determine if one value is greater than another.
@@ -401,7 +429,8 @@ runtimeFunctions.distance = `const distance = menu => {
  * @param {number} length Length of the list.
  * @returns {number} 0 based list index, or -1 if invalid.
  */
-baseRuntime += `const listIndexSlow = (index, length) => {
+baseRuntime += `
+const listIndexSlow = (index, length) => {
     if (index === 'last') {
         return length - 1;
     } else if (index === 'random' || index === 'any') {
@@ -493,14 +522,14 @@ runtimeFunctions.listDelete = `const listDelete = (list, idx) => {
  * @returns {boolean} True if the list contains the item
  */
 runtimeFunctions.listContains = `const listContains = (list, item) => {
-    // TODO: evaluate whether indexOf is worthwhile here
-    if (list.value.indexOf(item) !== -1) {
-        return true;
+    // Fast path for numbers and strings using indexOf
+    const t = typeof item;
+    if (t === 'number' || t === 'string') {
+        if (list.value.indexOf(item) !== -1) return true;
     }
+    // Slow path for complex comparisons
     for (let i = 0; i < list.value.length; i++) {
-        if (compareEqual(list.value[i], item)) {
-            return true;
-        }
+        if (compareEqual(list.value[i], item)) return true;
     }
     return false;
 }`;
