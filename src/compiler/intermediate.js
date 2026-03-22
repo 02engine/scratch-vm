@@ -164,6 +164,22 @@ class IntermediateInput {
 
         if (this.isAlwaysType(targetType)) return this;
 
+        // Eliminate redundant type conversions
+        // Handle: CAST_Y(CAST_X(x)) where x is already type Y -> x
+        // Example: CAST_NUMBER(CAST_STRING(myNumber)) -> myNumber
+        if (this.opcode === InputOpcode.CAST_BOOLEAN ||
+            this.opcode === InputOpcode.CAST_NUMBER ||
+            this.opcode === InputOpcode.CAST_NUMBER_INDEX ||
+            this.opcode === InputOpcode.CAST_NUMBER_OR_NAN ||
+            this.opcode === InputOpcode.CAST_STRING ||
+            this.opcode === InputOpcode.CAST_COLOR) {
+            const innerTarget = this.inputs.target;
+            // If the inner target is already the target type, skip the outer cast entirely
+            if (innerTarget && innerTarget.isAlwaysType(targetType)) {
+                return innerTarget.toType(targetType);
+            }
+        }
+
         if (this.opcode === InputOpcode.CONSTANT) {
             // If we are a constant, we can do the cast here at compile time
             switch (castOpcode) {
@@ -354,6 +370,13 @@ class IntermediateScript {
          * @type {string|null}
          */
         this.customCode = null;
+
+        /**
+         * Whether this procedure is recursive (directly or indirectly).
+         * Only applies to procedures.
+         * @type {boolean}
+         */
+        this.isRecursive = false;
 
     }
 }

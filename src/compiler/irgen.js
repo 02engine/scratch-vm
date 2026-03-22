@@ -299,7 +299,7 @@ class ScriptTreeGenerator {
             }
             return new IntermediateInput(InputOpcode.LOOKS_COSTUME_NAME, InputType.STRING);
         case 'looks_size':
-            return new IntermediateInput(InputOpcode.LOOKS_SIZE_GET, InputType.NUMBER_POS);
+            return new IntermediateInput(InputOpcode.LOOKS_SIZE_GET, InputType.NUMBER_POS | InputType.NUMBER_ZERO);
 
         case 'motion_direction':
             return new IntermediateInput(InputOpcode.MOTION_DIRECTION_GET, InputType.NUMBER_REAL);
@@ -806,6 +806,14 @@ class ScriptTreeGenerator {
             return new IntermediateStackBlock(StackOpcode.LOOKS_BACKDROP_NEXT);
         case 'looks_nextcostume':
             return new IntermediateStackBlock(StackOpcode.LOOKS_COSTUME_NEXT);
+        case 'looks_say':
+            return new IntermediateStackBlock(StackOpcode.LOOKS_SAY, {
+                message: this.descendInputOfBlock(block, 'MESSAGE')
+            });
+        case 'looks_think':
+            return new IntermediateStackBlock(StackOpcode.LOOKS_THINK, {
+                message: this.descendInputOfBlock(block, 'MESSAGE')
+            });
         case 'looks_seteffectto':
             return new IntermediateStackBlock(StackOpcode.LOOKS_EFFECT_SET, {
                 effect: block.fields.EFFECT.value.toLowerCase(),
@@ -1534,6 +1542,70 @@ class IRGenerator {
     }
 
     /**
+     * Analyze procedures to detect recursion (direct and indirect).
+     * A procedure is recursive if it calls itself directly or through other procedures.
+     */
+    analyzeRecursion () {
+        // Build a map of procedure variant -> procedure code (without warp suffix)
+        const variantToCode = new Map();
+        for (const variant of Object.keys(this.procedures)) {
+            const procedure = this.procedures[variant];
+            if (procedure.procedureCode) {
+                variantToCode.set(variant, procedure.procedureCode);
+            }
+        }
+
+        // For each procedure, check if it's recursive using DFS
+        for (const variant of Object.keys(this.procedures)) {
+            const procedure = this.procedures[variant];
+            if (!procedure.isProcedure) continue;
+
+            const visited = new Set();
+            const isRecursive = this._checkRecursion(variant, variant, visited, variantToCode);
+            if (isRecursive) {
+                procedure.isRecursive = true;
+            }
+        }
+    }
+
+    /**
+     * DFS helper to check if a procedure is recursive.
+     * @param {string} startVariant The variant we're checking for recursion.
+     * @param {string} currentVariant The variant we're currently visiting.
+     * @param {Set<string>} visited Set of visited variants.
+     * @param {Map<string, string>} variantToCode Map of variant to procedure code.
+     * @returns {boolean} True if recursive path found.
+     * @private
+     */
+    _checkRecursion (startVariant, currentVariant, visited, variantToCode) {
+        const procedure = this.procedures[currentVariant];
+        if (!procedure) return false;
+
+        for (const depVariant of procedure.dependedProcedures) {
+            const depProcedure = this.procedures[depVariant];
+            if (!depProcedure) continue;
+
+            // Check if this dependency has the same procedure code as the start
+            const startCode = variantToCode.get(startVariant);
+            const depCode = variantToCode.get(depVariant);
+
+            // Direct recursion: same procedure code
+            if (startCode && depCode && startCode === depCode) {
+                return true;
+            }
+
+            // Indirect recursion: check if we can reach back to start
+            if (!visited.has(depVariant)) {
+                visited.add(depVariant);
+                if (this._checkRecursion(startVariant, depVariant, visited, variantToCode)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /**
      * @returns {IntermediateRepresentation} Intermediate representation.
      */
     generate () {
@@ -1565,6 +1637,9 @@ class IRGenerator {
 
         // Analyze scripts until no changes are made.
         while (this.analyzeScript(entry));
+
+        // Analyze recursion for all procedures.
+        this.analyzeRecursion();
 
         return new IntermediateRepresentation(entry, this.procedures);
     }

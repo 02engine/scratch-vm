@@ -127,19 +127,6 @@ class JSGenerator {
         this.debug = this.target.runtime.debug;
 
         this.oldCompilerStub = new oldCompilerCompatibility.JSGeneratorStub(this);
-
-        /**
-         * Track which extensions are used for caching
-         * @type {Object.<string, boolean>}
-         */
-        this.usedExtensions = {
-            motion: false,
-            looks: false,
-            sensing: false,
-            control: false,
-            pen: false,
-            operators: false
-        };
     }
 
     /**
@@ -322,12 +309,8 @@ class JSGenerator {
             if (constVal === 1) return varExpr;
             // x * -1 => -x
             if (constVal === -1) return `(-${varExpr})`;
-            // x * 2 => x + x (addition can be faster than multiplication)
-            if (constVal === 2) return `(${varExpr} + ${varExpr})`;
             // x * 0.5 => x / 2 (for readability, though performance is similar)
             if (constVal === 0.5) return `(${varExpr} / 2)`;
-            // 2 * x => x + x
-            if (constVal === 2 && !constOnRight) return `(${varExpr} + ${varExpr})`;
             break;
         case '/':
             // x / 1 => x
@@ -434,9 +417,9 @@ class JSGenerator {
             if (node.target.isAlwaysType(InputType.NUMBER)) {
                 return this.descendInput(node.target);
             }
-            // If already number or NaN, just use || 0
+            // If already number or NaN, use toNotNaN (preserves -0)
             if (node.target.isAlwaysType(InputType.NUMBER_OR_NAN)) {
-                return `(${this.descendInput(node.target)} || 0)`;
+                return `toNotNaN(${this.descendInput(node.target)})`;
             }
             return `(+${this.descendInput(node.target)} || 0)`;
         case InputOpcode.CAST_NUMBER_OR_NAN:
@@ -706,8 +689,7 @@ class JSGenerator {
             if (node.useFloats) {
                 return `randomFloat(${this.descendInput(node.low)}, ${this.descendInput(node.high)})`;
             }
-            this.usedExtensions.operators = true;
-            return `operators._random(${this.descendInput(node.low)}, ${this.descendInput(node.high)})`;
+            return `runtime.ext_scratch3_operators._random(${this.descendInput(node.low)}, ${this.descendInput(node.high)})`;
         case InputOpcode.OP_ROUND: {
             const folded = this.tryFoldMathFn(node.value, 'round');
             if (folded !== null) return folded;
@@ -781,8 +763,7 @@ class JSGenerator {
             return `${procedureReference}(${joinedArgs})`;
         }
         case InputOpcode.SENSING_ANSWER:
-            this.usedExtensions.sensing = true;
-            return 'sensing._answer';
+            return 'runtime.ext_scratch3_sensing._answer';
         case InputOpcode.SENSING_COLOR_TOUCHING_COLOR:
             return `target.colorIsTouchingColor(${this.descendInput(node.target)}, ${this.descendInput(node.mask)})`;
         case InputOpcode.SENSING_TIME_DATE:
@@ -801,8 +782,7 @@ class JSGenerator {
         case InputOpcode.SENSING_TIME_MONTH:
             return `(new Date().getMonth() + 1)`;
         case InputOpcode.SENSING_OF:
-            this.usedExtensions.sensing = true;
-            return `sensing.getAttributeOf({OBJECT: ${this.descendInput(node.object)}, PROPERTY: "${sanitize(node.property)}" })`;
+            return `runtime.ext_scratch3_sensing.getAttributeOf({OBJECT: ${this.descendInput(node.object)}, PROPERTY: "${sanitize(node.property)}" })`;
         case InputOpcode.SENSING_OF_VOLUME: {
             const targetRef = this.descendTargetReference(node.object);
             return `(${targetRef} ? ${targetRef}.volume : 0)`;
@@ -847,8 +827,7 @@ class JSGenerator {
             return 'runtime.ioDevices.clock.projectTimer()';
 
         case InputOpcode.CONTROL_COUNTER:
-            this.usedExtensions.control = true;
-            return 'control._counter';
+            return 'runtime.ext_scratch3_control._counter';
 
         case InputOpcode.TW_KEY_LAST_PRESSED:
             return 'runtime.ioDevices.keyboard.getLastKeyPressed()';
@@ -937,8 +916,7 @@ class JSGenerator {
             break;
 
         case StackOpcode.CONTROL_CLONE_CREATE:
-            this.usedExtensions.control = true;
-            this.source += `control._createClone(${this.descendInput(node.target)}, target);\n`;
+            this.source += `runtime.ext_scratch3_control._createClone(${this.descendInput(node.target)}, target);\n`;
             break;
         case StackOpcode.CONTROL_CLONE_DELETE:
             this.source += 'if (!target.isOriginal) {\n';
@@ -949,10 +927,12 @@ class JSGenerator {
             break;
         case StackOpcode.CONTROL_FOR: {
             const index = this.localVariables.next();
+            // Cache the variable reference outside the loop for better performance
+            const varRef = this.referenceVariable(node.variable);
             this.source += `var ${index} = 0; `;
             this.source += `while (${index} < ${this.descendInput(node.count)}) { `;
             this.source += `${index}++; `;
-            this.source += `${this.referenceVariable(node.variable)}.value = ${index};\n`;
+            this.source += `${varRef}.value = ${index};\n`;
             this.descendStack(node.do, new Frame(true));
             this.yieldLoop();
             this.source += '}\n';
@@ -1066,12 +1046,10 @@ class JSGenerator {
             this.source += `}\n`;
             break;
         case StackOpcode.CONTROL_CLEAR_COUNTER:
-            this.usedExtensions.control = true;
-            this.source += 'control._counter = 0;\n';
+            this.source += 'runtime.ext_scratch3_control._counter = 0;\n';
             break;
         case StackOpcode.CONTORL_INCR_COUNTER:
-            this.usedExtensions.control = true;
-            this.source += 'control._counter++;\n';
+            this.source += 'runtime.ext_scratch3_control._counter++;\n';
             break;
 
         case StackOpcode.EVENT_BROADCAST:
@@ -1138,8 +1116,7 @@ class JSGenerator {
             break;
         case StackOpcode.LOOKS_EFFECT_CHANGE:
             if (Object.prototype.hasOwnProperty.call(this.target.effects, node.effect)) {
-                this.usedExtensions.looks = true;
-                this.source += `target.setEffect("${sanitize(node.effect)}", looks.clampEffect("${sanitize(node.effect)}", ${this.descendInput(node.value)} + target.effects["${sanitize(node.effect)}"]));\n`;
+                this.source += `target.setEffect("${sanitize(node.effect)}", runtime.ext_scratch3_looks.clampEffect("${sanitize(node.effect)}", ${this.descendInput(node.value)} + target.effects["${sanitize(node.effect)}"]));\n`;
             }
             break;
         case StackOpcode.LOOKS_SIZE_CHANGE:
@@ -1162,20 +1139,17 @@ class JSGenerator {
             break;
         case StackOpcode.LOOKS_HIDE:
             this.source += 'target.setVisible(false);\n';
-            this.usedExtensions.looks = true;
-            this.source += 'looks._renderBubble(target);\n';
+            this.source += 'runtime.ext_scratch3_looks._renderBubble(target);\n';
             break;
         case StackOpcode.LOOKS_BACKDROP_NEXT:
-            this.usedExtensions.looks = true;
-            this.source += 'looks._setBackdrop(stage, stage.currentCostume + 1, true);\n';
+            this.source += 'runtime.ext_scratch3_looks._setBackdrop(stage, stage.currentCostume + 1, true);\n';
             break;
         case StackOpcode.LOOKS_COSTUME_NEXT:
             this.source += 'target.setCostume(target.currentCostume + 1);\n';
             break;
         case StackOpcode.LOOKS_EFFECT_SET:
             if (Object.prototype.hasOwnProperty.call(this.target.effects, node.effect)) {
-                this.usedExtensions.looks = true;
-                this.source += `target.setEffect("${sanitize(node.effect)}", looks.clampEffect("${sanitize(node.effect)}", ${this.descendInput(node.value)}));\n`;
+                this.source += `target.setEffect("${sanitize(node.effect)}", runtime.ext_scratch3_looks.clampEffect("${sanitize(node.effect)}", ${this.descendInput(node.value)}));\n`;
             }
             break;
         case StackOpcode.LOOKS_SIZE_SET:
@@ -1183,32 +1157,31 @@ class JSGenerator {
             break;
         case StackOpcode.LOOKS_SHOW:
             this.source += 'target.setVisible(true);\n';
-            this.usedExtensions.looks = true;
-            this.source += 'looks._renderBubble(target);\n';
+            this.source += 'runtime.ext_scratch3_looks._renderBubble(target);\n';
             break;
         case StackOpcode.LOOKS_BACKDROP_SET:
-            this.usedExtensions.looks = true;
-            this.source += `looks._setBackdrop(stage, ${this.descendInput(node.backdrop)});\n`;
+            this.source += `runtime.ext_scratch3_looks._setBackdrop(stage, ${this.descendInput(node.backdrop)});\n`;
             break;
         case StackOpcode.LOOKS_COSTUME_SET:
-            this.usedExtensions.looks = true;
-            this.source += `looks._setCostume(target, ${this.descendInput(node.costume)});\n`;
+            this.source += `runtime.ext_scratch3_looks._setCostume(target, ${this.descendInput(node.costume)});\n`;
+            break;
+        case StackOpcode.LOOKS_SAY:
+            this.source += `runtime.ext_scratch3_looks._say(${this.descendInput(node.message)}, target);\n`;
+            break;
+        case StackOpcode.LOOKS_THINK:
+            this.source += `runtime.ext_scratch3_looks._think(${this.descendInput(node.message)}, target);\n`;
             break;
 
         case StackOpcode.MOTION_X_CHANGE:
-            this.usedExtensions.motion = true;
             this.source += `target.setXY(target.x + ${this.descendInput(node.dx)}, target.y);\n`;
             break;
         case StackOpcode.MOTION_Y_CHANGE:
-            this.usedExtensions.motion = true;
             this.source += `target.setXY(target.x, target.y + ${this.descendInput(node.dy)});\n`;
             break;
         case StackOpcode.MOTION_IF_ON_EDGE_BOUNCE:
-            this.usedExtensions.motion = true;
-            this.source += `motion._ifOnEdgeBounce(target);\n`;
+            this.source += `runtime.ext_scratch3_motion._ifOnEdgeBounce(target);\n`;
             break;
         case StackOpcode.MOTION_DIRECTION_SET:
-            this.usedExtensions.motion = true;
             this.source += `target.setDirection(${this.descendInput(node.direction)});\n`;
             break;
         case StackOpcode.MOTION_ROTATION_STYLE_SET:
@@ -1227,8 +1200,7 @@ class JSGenerator {
             break;
         }
         case StackOpcode.MOTION_STEP:
-            this.usedExtensions.motion = true;
-            this.source += `motion._moveSteps(${this.descendInput(node.steps)}, target);\n`;
+            this.source += `runtime.ext_scratch3_motion._moveSteps(${this.descendInput(node.steps)}, target);\n`;
             break;
 
         case StackOpcode.NOP:
@@ -1556,26 +1528,6 @@ class JSGenerator {
         script += 'const target = thread.target; ';
         script += 'const runtime = target.runtime; ';
         script += 'const stage = runtime.getTargetForStage();\n';
-
-        // Cache frequently used extensions
-        if (this.usedExtensions.motion) {
-            script += 'const motion = runtime.ext_scratch3_motion;\n';
-        }
-        if (this.usedExtensions.looks) {
-            script += 'const looks = runtime.ext_scratch3_looks;\n';
-        }
-        if (this.usedExtensions.sensing) {
-            script += 'const sensing = runtime.ext_scratch3_sensing;\n';
-        }
-        if (this.usedExtensions.control) {
-            script += 'const control = runtime.ext_scratch3_control;\n';
-        }
-        if (this.usedExtensions.pen) {
-            script += 'const pen = runtime.ext_pen;\n';
-        }
-        if (this.usedExtensions.operators) {
-            script += 'const operators = runtime.ext_scratch3_operators;\n';
-        }
 
         for (const varValue of Object.keys(this._setupVariables)) {
             const varName = this._setupVariables[varValue];

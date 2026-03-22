@@ -144,6 +144,165 @@ class IROptimizer {
     }
 
     /**
+     * Create a constant input node with the given value.
+     * @param {number} value
+     * @returns {IntermediateInput}
+     * @private
+     */
+    createConstantInput (value) {
+        // Determine the appropriate type based on the value
+        let type;
+        if (Number.isNaN(value)) {
+            type = InputType.NUMBER_NAN;
+        } else if (!Number.isFinite(value)) {
+            type = value > 0 ? InputType.NUMBER_POS_INF : InputType.NUMBER_NEG_INF;
+        } else if (Object.is(value, -0)) {
+            type = InputType.NUMBER_NEG_ZERO;
+        } else if (value === 0) {
+            type = InputType.NUMBER_ZERO;
+        } else if (Number.isInteger(value)) {
+            type = value > 0 ? InputType.NUMBER_POS_INT : InputType.NUMBER_NEG_INT;
+        } else {
+            type = value > 0 ? InputType.NUMBER_POS_FRACT : InputType.NUMBER_NEG_FRACT;
+        }
+        return new IntermediateInput(InputOpcode.CONSTANT, type, {value});
+    }
+
+    /**
+     * Try to fold a binary arithmetic operation at compile time.
+     * @param {IntermediateInput} left
+     * @param {IntermediateInput} right
+     * @param {string} op - The operation: '+', '-', '*', '/'
+     * @returns {IntermediateInput|null} - The folded constant or null if not foldable
+     * @private
+     */
+    tryFoldBinaryArithmetic (left, right, op) {
+        // Only fold if both operands are constant numbers
+        if (left.opcode !== InputOpcode.CONSTANT || right.opcode !== InputOpcode.CONSTANT) {
+            return null;
+        }
+        if (!left.isAlwaysType(InputType.NUMBER) || !right.isAlwaysType(InputType.NUMBER)) {
+            return null;
+        }
+
+        const leftVal = left.inputs.value;
+        const rightVal = right.inputs.value;
+
+        let result;
+        switch (op) {
+        case '+':
+            result = leftVal + rightVal;
+            break;
+        case '-':
+            result = leftVal - rightVal;
+            break;
+        case '*':
+            result = leftVal * rightVal;
+            break;
+        case '/':
+            // Avoid division by zero becoming Infinity
+            if (rightVal === 0) {
+                return null;
+            }
+            result = leftVal / rightVal;
+            break;
+        default:
+            return null;
+        }
+
+        return this.createConstantInput(result);
+    }
+
+    /**
+     * Try to fold a math function at compile time.
+     * @param {IntermediateInput} input
+     * @param {string} fn - The function name
+     * @returns {IntermediateInput|null} - The folded constant or null if not foldable
+     * @private
+     */
+    tryFoldMathFunction (input, fn) {
+        // Only fold if input is a constant number
+        if (input.opcode !== InputOpcode.CONSTANT) {
+            return null;
+        }
+        if (!input.isAlwaysType(InputType.NUMBER)) {
+            return null;
+        }
+
+        const value = input.inputs.value;
+        let result;
+
+        switch (fn) {
+        case 'abs':
+            result = Math.abs(value);
+            break;
+        case 'floor':
+            result = Math.floor(value);
+            break;
+        case 'ceil':
+            result = Math.ceil(value);
+            break;
+        case 'round':
+            result = Math.round(value);
+            break;
+        case 'sqrt':
+            if (value < 0) return null; // sqrt of negative is NaN
+            result = Math.sqrt(value);
+            break;
+        case 'sin':
+            // Scratch uses degrees, not radians
+            result = Math.sin((Math.PI * value) / 180);
+            result = Math.round(result * 1e10) / 1e10;
+            break;
+        case 'cos':
+            // Scratch uses degrees, not radians
+            result = Math.cos((Math.PI * value) / 180);
+            result = Math.round(result * 1e10) / 1e10;
+            break;
+        case 'tan':
+            // Scratch uses degrees, not radians
+            result = Math.tan((Math.PI * value) / 180);
+            result = Math.round(result * 1e10) / 1e10;
+            break;
+        case 'asin':
+            if (value < -1 || value > 1) return null; // asin out of range is NaN
+            // Scratch returns degrees
+            result = (Math.asin(value) * 180) / Math.PI;
+            result = Math.round(result * 1e10) / 1e10;
+            break;
+        case 'acos':
+            if (value < -1 || value > 1) return null; // acos out of range is NaN
+            // Scratch returns degrees
+            result = (Math.acos(value) * 180) / Math.PI;
+            result = Math.round(result * 1e10) / 1e10;
+            break;
+        case 'atan':
+            // Scratch returns degrees
+            result = (Math.atan(value) * 180) / Math.PI;
+            result = Math.round(result * 1e10) / 1e10;
+            break;
+        case 'ln':
+            if (value <= 0) return null; // ln of non-positive is NaN/-Infinity
+            result = Math.log(value);
+            break;
+        case 'log10':
+            if (value <= 0) return null; // log10 of non-positive is NaN/-Infinity
+            result = Math.log10(value);
+            break;
+        case 'exp':
+            result = Math.exp(value);
+            break;
+        case 'pow10':
+            result = Math.pow(10, value);
+            break;
+        default:
+            return null;
+        }
+
+        return this.createConstantInput(result);
+    }
+
+    /**
      * @param {IntermediateInput} inputBlock
      * @param {TypeState} state
      * @returns {InputType}
@@ -158,14 +317,34 @@ class IROptimizer {
         case InputOpcode.ADDON_CALL:
             break;
 
+        case InputOpcode.CAST_BOOLEAN: {
+            const innerType = inputs.target.type;
+            if (innerType & InputType.BOOLEAN) return innerType;
+            return InputType.BOOLEAN;
+        }
+
         case InputOpcode.CAST_NUMBER: {
             const innerType = inputs.target.type;
             if (innerType & InputType.NUMBER) return innerType;
             return InputType.NUMBER;
-        } case InputOpcode.CAST_NUMBER_OR_NAN: {
+        }
+
+        case InputOpcode.CAST_NUMBER_INDEX: {
+            const innerType = inputs.target.type;
+            if (innerType & InputType.NUMBER_INDEX) return innerType;
+            return InputType.NUMBER_INDEX;
+        }
+
+        case InputOpcode.CAST_NUMBER_OR_NAN: {
             const innerType = inputs.target.type;
             if (innerType & InputType.NUMBER_OR_NAN) return innerType;
             return InputType.NUMBER_OR_NAN;
+        }
+
+        case InputOpcode.CAST_STRING: {
+            const innerType = inputs.target.type;
+            if (innerType & InputType.STRING) return innerType;
+            return InputType.STRING;
         }
 
         case InputOpcode.OP_ADD: {
@@ -559,9 +738,12 @@ class IROptimizer {
             break;
         case StackOpcode.CONTROL_WHILE:
         case StackOpcode.CONTROL_FOR:
+            modified = this.analyzeInputs(inputs, state) || modified;
+            modified = this.analyzeLoopedStack(inputs.do, state, stackBlock, true) || modified;
+            break;
         case StackOpcode.CONTROL_REPEAT:
             modified = this.analyzeInputs(inputs, state) || modified;
-            modified = this.analyzeLoopedStack(inputs.do, state, stackBlock) || modified;
+            modified = this.analyzeLoopedStack(inputs.do, state, stackBlock, false) || modified;
             break;
         case StackOpcode.CONTROL_IF_ELSE: {
             modified = this.analyzeInputs(inputs, state) || modified;
@@ -642,20 +824,24 @@ class IROptimizer {
      * @param {IntermediateStack} stack
      * @param {TypeState} state
      * @param {IntermediateStackBlock} block
+     * @param {boolean} willReevaluateInputs
      * @returns {boolean}
      * @private
      */
-    analyzeLoopedStack (stack, state, block) {
+    analyzeLoopedStack (stack, state, block, willReevaluateInputs) {
+        let modified = false;
+
         if (block.yields && !this.ignoreYields) {
-            let modified = state.clear();
+            modified = state.clear();
+            if (willReevaluateInputs) {
+                modified = this.analyzeInputs(block.inputs, state) || modified;
+            }
             block.entryState = state.clone();
             block.exitState = state.clone();
-            modified = this.analyzeInputs(block.inputs, state) || modified;
             return this.analyzeStack(stack, state) || modified;
         }
 
         let iterations = 0;
-        let modified = false;
         let keepLooping;
         do {
             // If we are stuck in an apparent infinite loop, give up and assume the worst.
@@ -672,133 +858,13 @@ class IROptimizer {
             const newState = state.clone();
             modified = this.analyzeStack(stack, newState) || modified;
             modified = (keepLooping = state.or(newState)) || modified;
-            modified = this.analyzeInputs(block.inputs, state) || modified;
+
+            if (willReevaluateInputs) {
+                modified = this.analyzeInputs(block.inputs, state) || modified;
+            }
         } while (keepLooping);
         block.entryState = state.clone();
         return modified;
-    }
-
-    /**
-     * Check if an input is a numeric constant
-     * @param {IntermediateInput} input
-     * @returns {boolean}
-     * @private
-     */
-    isConstantNumber (input) {
-        return input.opcode === InputOpcode.CONSTANT &&
-            typeof input.inputs.value === 'number' &&
-            !Number.isNaN(input.inputs.value);
-    }
-
-    /**
-     * Get the numeric value of a constant input
-     * @param {IntermediateInput} input
-     * @returns {number}
-     * @private
-     */
-    getConstantValue (input) {
-        return input.inputs.value;
-    }
-
-    /**
-     * Create a constant input from a value
-     * @param {number} value
-     * @returns {IntermediateInput}
-     * @private
-     */
-    createConstantInput (value) {
-        const {IntermediateInput} = require('./intermediate');
-        let type;
-        if (value === Infinity) type = InputType.NUMBER_POS_INF;
-        else if (value === -Infinity) type = InputType.NUMBER_NEG_INF;
-        else if (Number.isNaN(value)) type = InputType.NUMBER_NAN;
-        else if (Object.is(value, -0)) type = InputType.NUMBER_NEG_ZERO;
-        else if (value === 0) type = InputType.NUMBER_ZERO;
-        else if (value < 0) type = Number.isInteger(value) ? InputType.NUMBER_NEG_INT : InputType.NUMBER_NEG_FRACT;
-        else type = Number.isInteger(value) ? InputType.NUMBER_POS_INT : InputType.NUMBER_POS_FRACT;
-        return new IntermediateInput(InputOpcode.CONSTANT, type, {value});
-    }
-
-    /**
-     * Try to fold a binary arithmetic operation at compile time
-     * @param {IntermediateInput} left
-     * @param {IntermediateInput} right
-     * @param {string} op
-     * @returns {IntermediateInput|null}
-     * @private
-     */
-    tryFoldBinaryArithmetic (left, right, op) {
-        if (!this.isConstantNumber(left) || !this.isConstantNumber(right)) {
-            return null;
-        }
-
-        const leftVal = this.getConstantValue(left);
-        const rightVal = this.getConstantValue(right);
-        let result;
-
-        switch (op) {
-        case '+': result = leftVal + rightVal; break;
-        case '-': result = leftVal - rightVal; break;
-        case '*': result = leftVal * rightVal; break;
-        case '/': result = leftVal / rightVal; break;
-        default: return null;
-        }
-
-        return this.createConstantInput(result);
-    }
-
-    /**
-     * Try to fold a math function at compile time
-     * @param {IntermediateInput} input
-     * @param {string} fn
-     * @returns {IntermediateInput|null}
-     * @private
-     */
-    tryFoldMathFunction (input, fn) {
-        if (!this.isConstantNumber(input)) {
-            return null;
-        }
-
-        const val = this.getConstantValue(input);
-        let result;
-
-        switch (fn) {
-        case 'abs': result = Math.abs(val); break;
-        case 'floor': result = Math.floor(val); break;
-        case 'ceil': result = Math.ceil(val); break;
-        case 'round': result = Math.round(val); break;
-        case 'sqrt': result = Math.sqrt(val); break;
-        case 'sin': {
-            const radians = (Math.PI * val) / 180;
-            result = Math.round(Math.sin(radians) * 1e10) / 1e10;
-            break;
-        }
-        case 'cos': {
-            const radians = (Math.PI * val) / 180;
-            result = Math.round(Math.cos(radians) * 1e10) / 1e10;
-            break;
-        }
-        case 'tan': {
-            const mod = val % 360;
-            if (mod === 90 || mod === -270) result = Infinity;
-            else if (mod === 270 || mod === -90) result = -Infinity;
-            else {
-                const radians = (Math.PI * val) / 180;
-                result = Math.round(Math.tan(radians) * 1e10) / 1e10;
-            }
-            break;
-        }
-        case 'asin': result = (Math.asin(val) * 180) / Math.PI; break;
-        case 'acos': result = (Math.acos(val) * 180) / Math.PI; break;
-        case 'atan': result = (Math.atan(val) * 180) / Math.PI; break;
-        case 'ln': result = Math.log(val); break;
-        case 'log10': result = Math.log(val) / Math.LN10; break;
-        case 'exp': result = Math.exp(val); break;
-        case 'pow10': result = Math.pow(10, val); break;
-        default: return null;
-        }
-
-        return this.createConstantInput(result);
     }
 
     /**
@@ -816,19 +882,46 @@ class IROptimizer {
         }
 
         switch (input.opcode) {
+        case InputOpcode.CAST_BOOLEAN: {
+            const targetType = input.inputs.target.type;
+            if ((targetType & InputType.BOOLEAN) === targetType) {
+                return input.inputs.target;
+            }
+            return input;
+        }
+
         case InputOpcode.CAST_NUMBER: {
             const targetType = input.inputs.target.type;
             if ((targetType & InputType.NUMBER) === targetType) {
                 return input.inputs.target;
             }
             return input;
-        } case InputOpcode.CAST_NUMBER_OR_NAN: {
+        }
+
+        case InputOpcode.CAST_NUMBER_INDEX: {
+            const targetType = input.inputs.target.type;
+            if ((targetType & InputType.NUMBER_INDEX) === targetType) {
+                return input.inputs.target;
+            }
+            return input;
+        }
+
+        case InputOpcode.CAST_NUMBER_OR_NAN: {
             const targetType = input.inputs.target.type;
             if ((targetType & InputType.NUMBER_OR_NAN) === targetType) {
                 return input.inputs.target;
             }
             return input;
         }
+
+        case InputOpcode.CAST_STRING: {
+            const targetType = input.inputs.target.type;
+            if ((targetType & InputType.STRING) === targetType) {
+                return input.inputs.target;
+            }
+            return input;
+        }
+
         // Constant folding for arithmetic operations
         case InputOpcode.OP_ADD: {
             const folded = this.tryFoldBinaryArithmetic(input.inputs.left, input.inputs.right, '+');
@@ -846,6 +939,7 @@ class IROptimizer {
             const folded = this.tryFoldBinaryArithmetic(input.inputs.left, input.inputs.right, '/');
             return folded || input;
         }
+
         // Constant folding for math functions
         case InputOpcode.OP_ABS: {
             const folded = this.tryFoldMathFunction(input.inputs.value, 'abs');
