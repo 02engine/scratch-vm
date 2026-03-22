@@ -174,6 +174,48 @@ class JSGenerator {
     }
 
     /**
+     * Check if an input can be determined to be an integer at compile time
+     * @param {IntermediateInput} input
+     * @returns {boolean}
+     */
+    isIntegerValue (input) {
+        if (input.opcode === InputOpcode.CONSTANT && input.isAlwaysType(InputType.NUMBER_INT)) {
+            return true;
+        }
+        // Check for cast to integer index
+        if (input.opcode === InputOpcode.CAST_NUMBER_INDEX) {
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * Try to use sin/cos lookup table for integer angles
+     * @param {IntermediateInput} input
+     * @param {string} table - 'sinTable' or 'cosTable'
+     * @returns {string|null} - The lookup expression or null if not applicable
+     */
+    tryTrigLookup (input, table) {
+        // For constant integer angles, use lookup table directly
+        if (input.opcode === InputOpcode.CONSTANT && input.isAlwaysType(InputType.NUMBER_INT)) {
+            const angle = input.inputs.value;
+            const normalizedAngle = ((angle % 360) + 360) % 360;
+            // Return the precomputed value directly
+            if (table === 'sinTable') {
+                return this.formatNumber(Math.round(Math.sin((Math.PI * normalizedAngle) / 180) * 1e10) / 1e10);
+            } else {
+                return this.formatNumber(Math.round(Math.cos((Math.PI * normalizedAngle) / 180) * 1e10) / 1e10);
+            }
+        }
+        // For integer-typed inputs, use lookup table at runtime
+        if (input.isAlwaysType(InputType.NUMBER_INT)) {
+            const expr = this.descendInput(input);
+            return `(${table}[(${expr} | 0) % 360] || 0)`;
+        }
+        return null;
+    }
+
+    /**
      * Try to fold a binary arithmetic operation at compile time
      * @param {IntermediateInput} left
      * @param {IntermediateInput} right
@@ -462,6 +504,9 @@ class JSGenerator {
         case InputOpcode.OP_COS: {
             const folded = this.tryFoldMathFn(node.value, 'cos');
             if (folded !== null) return folded;
+            // Try to use lookup table for integer angles
+            const lookup = this.tryTrigLookup(node.value, 'cosTable');
+            if (lookup !== null) return lookup;
             return `(Math.round(Math.cos((Math.PI * ${this.descendInput(node.value)}) / 180) * 1e10) / 1e10)`;
         }
         case InputOpcode.OP_DIVIDE: {
@@ -516,8 +561,26 @@ class JSGenerator {
             // No compile-time optimizations possible - use fallback method.
             return `compareGreaterThan(${this.descendInput(left)}, ${this.descendInput(right)})`;
         }
-        case InputOpcode.OP_JOIN:
-            return `(${this.descendInput(node.left)} + ${this.descendInput(node.right)})`;
+        case InputOpcode.OP_JOIN: {
+            const left = node.left;
+            const right = node.right;
+            // When both operands are known to be strings, we can use simple concatenation
+            if (left.isAlwaysType(InputType.STRING) && right.isAlwaysType(InputType.STRING)) {
+                return `(${this.descendInput(left)} + ${this.descendInput(right)})`;
+            }
+            // When one operand is a number and the other is a string, use concatenation
+            // JS will automatically convert number to string
+            if ((left.isAlwaysType(InputType.NUMBER) && right.isAlwaysType(InputType.STRING)) ||
+                (left.isAlwaysType(InputType.STRING) && right.isAlwaysType(InputType.NUMBER))) {
+                return `(${this.descendInput(left)} + ${this.descendInput(right)})`;
+            }
+            // When both are numbers, convert to string first
+            if (left.isAlwaysType(InputType.NUMBER) && right.isAlwaysType(InputType.NUMBER)) {
+                return `("" + ${this.descendInput(left)} + ${this.descendInput(right)})`;
+            }
+            // Default: use concatenation (JS handles type coercion)
+            return `(${this.descendInput(left)} + ${this.descendInput(right)})`;
+        }
         case InputOpcode.OP_LENGTH:
             return `${this.descendInput(node.string)}.length`;
         case InputOpcode.OP_LESS: {
@@ -579,6 +642,9 @@ class JSGenerator {
         case InputOpcode.OP_SIN: {
             const folded = this.tryFoldMathFn(node.value, 'sin');
             if (folded !== null) return folded;
+            // Try to use lookup table for integer angles
+            const lookup = this.tryTrigLookup(node.value, 'sinTable');
+            if (lookup !== null) return lookup;
             return `(Math.round(Math.sin((Math.PI * ${this.descendInput(node.value)}) / 180) * 1e10) / 1e10)`;
         }
         case InputOpcode.OP_SQRT: {
@@ -811,7 +877,24 @@ class JSGenerator {
             this.source += '}\n';
             break;
         }
-        case StackOpcode.CONTROL_IF_ELSE:
+        case StackOpcode.CONTROL_IF_ELSE: {
+            // Check for constant condition optimization
+            if (node.condition.opcode === InputOpcode.CONSTANT) {
+                if (node.condition.isAlwaysType(InputType.BOOLEAN)) {
+                    const conditionValue = node.condition.inputs.value;
+                    if (conditionValue === true) {
+                        // Condition is always true, only execute the true branch
+                        this.descendStack(node.whenTrue, new Frame(false));
+                        break;
+                    } else if (conditionValue === false) {
+                        // Condition is always false, only execute the false branch (if any)
+                        if (node.whenFalse.blocks.length) {
+                            this.descendStack(node.whenFalse, new Frame(false));
+                        }
+                        break;
+                    }
+                }
+            }
             this.source += `if (${this.descendInput(node.condition)}) {\n`;
             this.descendStack(node.whenTrue, new Frame(false));
             // only add the else branch if it won't be empty
@@ -822,21 +905,32 @@ class JSGenerator {
             }
             this.source += `}\n`;
             break;
+        }
         case StackOpcode.CONTROL_REPEAT: {
-            // Check if we can unroll the loop (small constant iterations)
-            const MAX_UNROLL_ITERATIONS = 3;
-            if (node.times.isAlwaysType(InputType.NUMBER_INT) &&
-                node.times.opcode === InputOpcode.CONSTANT &&
-                node.times.inputs.value > 0 &&
-                node.times.inputs.value <= MAX_UNROLL_ITERATIONS &&
-                !this.warpTimer && // Don't unroll if warp timer is needed
-                node.do.blocks.length > 0) {
-                // Unroll the loop
-                const iterations = Math.floor(node.times.inputs.value);
-                for (let iter = 0; iter < iterations; iter++) {
-                    this.descendStack(node.do, new Frame(false));
+            // Check if iterations is a constant
+            if (node.times.opcode === InputOpcode.CONSTANT) {
+                const timesValue = node.times.inputs.value;
+
+                // Skip loop entirely if iterations is 0, negative, or NaN
+                if (typeof timesValue === 'number' && (timesValue <= 0 || timesValue !== timesValue)) {
+                    // Don't generate any code for zero/negative/NaN iterations
+                    break;
                 }
-                break;
+
+                // Check if we can unroll the loop (small constant iterations)
+                const MAX_UNROLL_ITERATIONS = 3;
+                if (node.times.isAlwaysType(InputType.NUMBER_INT) &&
+                    timesValue > 0 &&
+                    timesValue <= MAX_UNROLL_ITERATIONS &&
+                    !this.warpTimer && // Don't unroll if warp timer is needed
+                    node.do.blocks.length > 0) {
+                    // Unroll the loop
+                    const iterations = Math.floor(timesValue);
+                    for (let iter = 0; iter < iterations; iter++) {
+                        this.descendStack(node.do, new Frame(false));
+                    }
+                    break;
+                }
             }
 
             // Normal loop generation
