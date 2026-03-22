@@ -296,6 +296,63 @@ class JSGenerator {
     }
 
     /**
+     * Try strength reduction for binary operations
+     * Converts expensive operations to cheaper equivalents when one operand is constant
+     * @param {IntermediateInput} left
+     * @param {IntermediateInput} right
+     * @param {string} op - The operation: '+', '-', '*', '/'
+     * @returns {string|null} - The optimized expression or null if not applicable
+     */
+    tryStrengthReduction (left, right, op) {
+        // Only apply when exactly one operand is a constant
+        const leftIsConst = this.isNumericConstant(left);
+        const rightIsConst = this.isNumericConstant(right);
+
+        if (!leftIsConst && !rightIsConst) return null;
+        if (leftIsConst && rightIsConst) return null; // Let constant folding handle this
+
+        const constVal = leftIsConst ? this.getConstantNumber(left) : this.getConstantNumber(right);
+        const varInput = leftIsConst ? right : left;
+        const varExpr = this.descendInput(varInput);
+        const constOnRight = rightIsConst;
+
+        switch (op) {
+        case '*':
+            // x * 1 => x
+            if (constVal === 1) return varExpr;
+            // x * -1 => -x
+            if (constVal === -1) return `(-${varExpr})`;
+            // x * 2 => x + x (addition can be faster than multiplication)
+            if (constVal === 2) return `(${varExpr} + ${varExpr})`;
+            // x * 0.5 => x / 2 (for readability, though performance is similar)
+            if (constVal === 0.5) return `(${varExpr} / 2)`;
+            // 2 * x => x + x
+            if (constVal === 2 && !constOnRight) return `(${varExpr} + ${varExpr})`;
+            break;
+        case '/':
+            // x / 1 => x
+            if (constVal === 1 && constOnRight) return varExpr;
+            // x / -1 => -x
+            if (constVal === -1 && constOnRight) return `(-${varExpr})`;
+            // x / 2 => x * 0.5 (multiplication is typically faster than division)
+            if (constVal === 2 && constOnRight) return `(${varExpr} * 0.5)`;
+            // x / 4 => x * 0.25
+            if (constVal === 4 && constOnRight) return `(${varExpr} * 0.25)`;
+            break;
+        case '+':
+            // x + 0 => x
+            if (constVal === 0) return varExpr;
+            break;
+        case '-':
+            // x - 0 => x
+            if (constVal === 0 && constOnRight) return varExpr;
+            break;
+        }
+
+        return null;
+    }
+
+    /**
      * Enter a new frame
      * @param {Frame} frame New frame.
      */
@@ -480,6 +537,9 @@ class JSGenerator {
         case InputOpcode.OP_ADD: {
             const folded = this.tryFoldBinaryOp(node.left, node.right, '+');
             if (folded !== null) return folded;
+            // Try strength reduction
+            const reduced = this.tryStrengthReduction(node.left, node.right, '+');
+            if (reduced !== null) return reduced;
             return `(${this.descendInput(node.left)} + ${this.descendInput(node.right)})`;
         }
         case InputOpcode.OP_AND:
@@ -497,6 +557,10 @@ class JSGenerator {
         case InputOpcode.OP_CEILING: {
             const folded = this.tryFoldMathFn(node.value, 'ceil');
             if (folded !== null) return folded;
+            // If input is already an integer type, no need to ceil
+            if (node.value.isAlwaysType(InputType.NUMBER_INT | InputType.NUMBER_WHOLE)) {
+                return this.descendInput(node.value);
+            }
             return `Math.ceil(${this.descendInput(node.value)})`;
         }
         case InputOpcode.OP_CONTAINS:
@@ -512,6 +576,9 @@ class JSGenerator {
         case InputOpcode.OP_DIVIDE: {
             const folded = this.tryFoldBinaryOp(node.left, node.right, '/');
             if (folded !== null) return folded;
+            // Try strength reduction
+            const reduced = this.tryStrengthReduction(node.left, node.right, '/');
+            if (reduced !== null) return reduced;
             return `(${this.descendInput(node.left)} / ${this.descendInput(node.right)})`;
         }
         case InputOpcode.OP_EQUALS: {
@@ -541,6 +608,10 @@ class JSGenerator {
         case InputOpcode.OP_FLOOR: {
             const folded = this.tryFoldMathFn(node.value, 'floor');
             if (folded !== null) return folded;
+            // If input is already an integer type, no need to floor
+            if (node.value.isAlwaysType(InputType.NUMBER_INT | InputType.NUMBER_WHOLE)) {
+                return this.descendInput(node.value);
+            }
             return `Math.floor(${this.descendInput(node.value)})`;
         }
         case InputOpcode.OP_GREATER: {
@@ -619,6 +690,9 @@ class JSGenerator {
         case InputOpcode.OP_MULTIPLY: {
             const folded = this.tryFoldBinaryOp(node.left, node.right, '*');
             if (folded !== null) return folded;
+            // Try strength reduction
+            const reduced = this.tryStrengthReduction(node.left, node.right, '*');
+            if (reduced !== null) return reduced;
             return `(${this.descendInput(node.left)} * ${this.descendInput(node.right)})`;
         }
         case InputOpcode.OP_NOT:
@@ -637,6 +711,10 @@ class JSGenerator {
         case InputOpcode.OP_ROUND: {
             const folded = this.tryFoldMathFn(node.value, 'round');
             if (folded !== null) return folded;
+            // If input is already an integer type, no need to round
+            if (node.value.isAlwaysType(InputType.NUMBER_INT | InputType.NUMBER_WHOLE)) {
+                return this.descendInput(node.value);
+            }
             return `Math.round(${this.descendInput(node.value)})`;
         }
         case InputOpcode.OP_SIN: {
@@ -655,6 +733,9 @@ class JSGenerator {
         case InputOpcode.OP_SUBTRACT: {
             const folded = this.tryFoldBinaryOp(node.left, node.right, '-');
             if (folded !== null) return folded;
+            // Try strength reduction
+            const reduced = this.tryStrengthReduction(node.left, node.right, '-');
+            if (reduced !== null) return reduced;
             return `(${this.descendInput(node.left)} - ${this.descendInput(node.right)})`;
         }
         case InputOpcode.OP_TAN: {

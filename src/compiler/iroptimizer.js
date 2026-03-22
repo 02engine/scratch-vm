@@ -679,6 +679,129 @@ class IROptimizer {
     }
 
     /**
+     * Check if an input is a numeric constant
+     * @param {IntermediateInput} input
+     * @returns {boolean}
+     * @private
+     */
+    isConstantNumber (input) {
+        return input.opcode === InputOpcode.CONSTANT &&
+            typeof input.inputs.value === 'number' &&
+            !Number.isNaN(input.inputs.value);
+    }
+
+    /**
+     * Get the numeric value of a constant input
+     * @param {IntermediateInput} input
+     * @returns {number}
+     * @private
+     */
+    getConstantValue (input) {
+        return input.inputs.value;
+    }
+
+    /**
+     * Create a constant input from a value
+     * @param {number} value
+     * @returns {IntermediateInput}
+     * @private
+     */
+    createConstantInput (value) {
+        const {IntermediateInput} = require('./intermediate');
+        let type;
+        if (value === Infinity) type = InputType.NUMBER_POS_INF;
+        else if (value === -Infinity) type = InputType.NUMBER_NEG_INF;
+        else if (Number.isNaN(value)) type = InputType.NUMBER_NAN;
+        else if (Object.is(value, -0)) type = InputType.NUMBER_NEG_ZERO;
+        else if (value === 0) type = InputType.NUMBER_ZERO;
+        else if (value < 0) type = Number.isInteger(value) ? InputType.NUMBER_NEG_INT : InputType.NUMBER_NEG_FRACT;
+        else type = Number.isInteger(value) ? InputType.NUMBER_POS_INT : InputType.NUMBER_POS_FRACT;
+        return new IntermediateInput(InputOpcode.CONSTANT, type, {value});
+    }
+
+    /**
+     * Try to fold a binary arithmetic operation at compile time
+     * @param {IntermediateInput} left
+     * @param {IntermediateInput} right
+     * @param {string} op
+     * @returns {IntermediateInput|null}
+     * @private
+     */
+    tryFoldBinaryArithmetic (left, right, op) {
+        if (!this.isConstantNumber(left) || !this.isConstantNumber(right)) {
+            return null;
+        }
+
+        const leftVal = this.getConstantValue(left);
+        const rightVal = this.getConstantValue(right);
+        let result;
+
+        switch (op) {
+        case '+': result = leftVal + rightVal; break;
+        case '-': result = leftVal - rightVal; break;
+        case '*': result = leftVal * rightVal; break;
+        case '/': result = leftVal / rightVal; break;
+        default: return null;
+        }
+
+        return this.createConstantInput(result);
+    }
+
+    /**
+     * Try to fold a math function at compile time
+     * @param {IntermediateInput} input
+     * @param {string} fn
+     * @returns {IntermediateInput|null}
+     * @private
+     */
+    tryFoldMathFunction (input, fn) {
+        if (!this.isConstantNumber(input)) {
+            return null;
+        }
+
+        const val = this.getConstantValue(input);
+        let result;
+
+        switch (fn) {
+        case 'abs': result = Math.abs(val); break;
+        case 'floor': result = Math.floor(val); break;
+        case 'ceil': result = Math.ceil(val); break;
+        case 'round': result = Math.round(val); break;
+        case 'sqrt': result = Math.sqrt(val); break;
+        case 'sin': {
+            const radians = (Math.PI * val) / 180;
+            result = Math.round(Math.sin(radians) * 1e10) / 1e10;
+            break;
+        }
+        case 'cos': {
+            const radians = (Math.PI * val) / 180;
+            result = Math.round(Math.cos(radians) * 1e10) / 1e10;
+            break;
+        }
+        case 'tan': {
+            const mod = val % 360;
+            if (mod === 90 || mod === -270) result = Infinity;
+            else if (mod === 270 || mod === -90) result = -Infinity;
+            else {
+                const radians = (Math.PI * val) / 180;
+                result = Math.round(Math.tan(radians) * 1e10) / 1e10;
+            }
+            break;
+        }
+        case 'asin': result = (Math.asin(val) * 180) / Math.PI; break;
+        case 'acos': result = (Math.acos(val) * 180) / Math.PI; break;
+        case 'atan': result = (Math.atan(val) * 180) / Math.PI; break;
+        case 'ln': result = Math.log(val); break;
+        case 'log10': result = Math.log(val) / Math.LN10; break;
+        case 'exp': result = Math.exp(val); break;
+        case 'pow10': result = Math.pow(10, val); break;
+        default: return null;
+        }
+
+        return this.createConstantInput(result);
+    }
+
+    /**
      * @param {IntermediateInput} input
      * @param {TypeState} state
      * @returns {IntermediateInput}
@@ -705,6 +828,84 @@ class IROptimizer {
                 return input.inputs.target;
             }
             return input;
+        }
+        // Constant folding for arithmetic operations
+        case InputOpcode.OP_ADD: {
+            const folded = this.tryFoldBinaryArithmetic(input.inputs.left, input.inputs.right, '+');
+            return folded || input;
+        }
+        case InputOpcode.OP_SUBTRACT: {
+            const folded = this.tryFoldBinaryArithmetic(input.inputs.left, input.inputs.right, '-');
+            return folded || input;
+        }
+        case InputOpcode.OP_MULTIPLY: {
+            const folded = this.tryFoldBinaryArithmetic(input.inputs.left, input.inputs.right, '*');
+            return folded || input;
+        }
+        case InputOpcode.OP_DIVIDE: {
+            const folded = this.tryFoldBinaryArithmetic(input.inputs.left, input.inputs.right, '/');
+            return folded || input;
+        }
+        // Constant folding for math functions
+        case InputOpcode.OP_ABS: {
+            const folded = this.tryFoldMathFunction(input.inputs.value, 'abs');
+            return folded || input;
+        }
+        case InputOpcode.OP_FLOOR: {
+            const folded = this.tryFoldMathFunction(input.inputs.value, 'floor');
+            return folded || input;
+        }
+        case InputOpcode.OP_CEILING: {
+            const folded = this.tryFoldMathFunction(input.inputs.value, 'ceil');
+            return folded || input;
+        }
+        case InputOpcode.OP_ROUND: {
+            const folded = this.tryFoldMathFunction(input.inputs.value, 'round');
+            return folded || input;
+        }
+        case InputOpcode.OP_SQRT: {
+            const folded = this.tryFoldMathFunction(input.inputs.value, 'sqrt');
+            return folded || input;
+        }
+        case InputOpcode.OP_SIN: {
+            const folded = this.tryFoldMathFunction(input.inputs.value, 'sin');
+            return folded || input;
+        }
+        case InputOpcode.OP_COS: {
+            const folded = this.tryFoldMathFunction(input.inputs.value, 'cos');
+            return folded || input;
+        }
+        case InputOpcode.OP_TAN: {
+            const folded = this.tryFoldMathFunction(input.inputs.value, 'tan');
+            return folded || input;
+        }
+        case InputOpcode.OP_ASIN: {
+            const folded = this.tryFoldMathFunction(input.inputs.value, 'asin');
+            return folded || input;
+        }
+        case InputOpcode.OP_ACOS: {
+            const folded = this.tryFoldMathFunction(input.inputs.value, 'acos');
+            return folded || input;
+        }
+        case InputOpcode.OP_ATAN: {
+            const folded = this.tryFoldMathFunction(input.inputs.value, 'atan');
+            return folded || input;
+        }
+        case InputOpcode.OP_LOG_E: {
+            const folded = this.tryFoldMathFunction(input.inputs.value, 'ln');
+            return folded || input;
+        }
+        case InputOpcode.OP_LOG_10: {
+            const folded = this.tryFoldMathFunction(input.inputs.value, 'log10');
+            return folded || input;
+        }
+        case InputOpcode.OP_POW_E: {
+            const folded = this.tryFoldMathFunction(input.inputs.value, 'exp');
+            return folded || input;
+        }
+        case InputOpcode.OP_POW_10: {
+            const folded = this.tryFoldMathFunction(input.inputs.value, 'pow10');
+            return folded || input;
         }
         }
 
