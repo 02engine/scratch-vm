@@ -471,7 +471,8 @@ class Runtime extends EventEmitter {
         this.runtimeOptions = {
             maxClones: Runtime.MAX_CLONES,
             miscLimits: true,
-            fencing: true
+            fencing: true,
+            offscreenDrawableCulling: false
         };
 
         this.compilerOptions = {
@@ -1992,6 +1993,9 @@ class Runtime extends EventEmitter {
         this.renderer = renderer;
         this.renderer.setLayerGroupOrdering(StageLayering.LAYER_GROUPS);
         this.renderer.offscreenTouching = !this.runtimeOptions.fencing;
+        if (this.renderer.setOffscreenDrawableCulling) {
+            this.renderer.setOffscreenDrawableCulling(this.runtimeOptions.offscreenDrawableCulling);
+        }
         this.updatePrivacy();
     }
 
@@ -2739,6 +2743,9 @@ class Runtime extends EventEmitter {
         this.emit(Runtime.RUNTIME_OPTIONS_CHANGED, this.runtimeOptions);
         if (this.renderer) {
             this.renderer.offscreenTouching = !this.runtimeOptions.fencing;
+            if (this.renderer.setOffscreenDrawableCulling) {
+                this.renderer.setOffscreenDrawableCulling(this.runtimeOptions.offscreenDrawableCulling);
+            }
         }
     }
 
