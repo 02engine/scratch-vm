@@ -4,7 +4,7 @@ const {IRGenerator} = require('./irgen');
 const {IROptimizer} = require('./iroptimizer');
 const JSGenerator = require('./jsgen');
 
-const compile = (/** @type {import("../engine/thread")} */ thread) => {
+const compileThread = (/** @type {import("../engine/thread")} */ thread, asSources) => {
     const irGenerator = new IRGenerator(thread);
     const ir = irGenerator.generate();
 
@@ -20,7 +20,9 @@ const compile = (/** @type {import("../engine/thread")} */ thread) => {
         }
 
         const compiler = new JSGenerator(script, ir, target);
-        const result = compiler.compile();
+        const result = asSources ? {
+            factorySource: compiler.getSourceCode()
+        } : compiler.compile();
         script.cachedCompileResult = result;
         return result;
     };
@@ -39,5 +41,9 @@ const compile = (/** @type {import("../engine/thread")} */ thread) => {
         executableHat: ir.entry.executableHat
     };
 };
+
+const compile = thread => compileThread(thread, false);
+
+compile.asSources = thread => compileThread(thread, true);
 
 module.exports = compile;

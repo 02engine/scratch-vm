@@ -228,6 +228,18 @@ class Runtime extends EventEmitter {
 
         this.threadMap = new Map();
 
+        /**
+         * Precompiled script bundles keyed by runtime target id.
+         * @type {Map<string, {scripts: Object.<string, {startingFunction: Function, executableHat: boolean}>, procedures: Object.<string, Function>}>}
+         */
+        this._compiledTargetScripts = new Map();
+
+        /**
+         * Precompiled hat manifest keyed by opcode.
+         * @type {Map<string, Array<{targetId: string, topBlockId: string, fieldsOfInputs: object}>>}
+         */
+        this._compiledHats = new Map();
+
         /** @type {!Sequencer} */
         this.sequencer = new Sequencer(this);
 
@@ -547,6 +559,139 @@ class Runtime extends EventEmitter {
          * Total number of finished or errored scratch-storage load() requests since the runtime was created or cleared.
          */
         this.finishedAssetRequests = 0;
+    }
+
+    clearCompiledProjectData () {
+        this._compiledTargetScripts.clear();
+        this._compiledHats.clear();
+        for (const target of this.targets) {
+            delete target.compiledScripts;
+            delete target.compiledProcedures;
+        }
+    }
+
+    installCompiledProjectData (compiledProjectData) {
+        this.clearCompiledProjectData();
+        if (!compiledProjectData || !compiledProjectData.compiledTargets) {
+            return;
+        }
+
+        const originalTargets = this.targets.filter(target => target.isOriginal);
+
+        for (const [targetKey, targetData] of Object.entries(compiledProjectData.compiledTargets)) {
+            let target = this.getTargetById(targetKey);
+            if (!target) {
+                const targetIndex = Number.isInteger(targetData && targetData.targetIndex) ?
+                    targetData.targetIndex :
+                    Number.parseInt(targetKey, 10);
+                if (Number.isInteger(targetIndex) && targetIndex >= 0 && targetIndex < originalTargets.length) {
+                    target = originalTargets[targetIndex];
+                }
+            }
+            if (!target && targetData && typeof targetData.name === 'string') {
+                target = originalTargets.find(candidate =>
+                    candidate && candidate.isStage === !!targetData.isStage && candidate.getName() === targetData.name
+                );
+            }
+            if (!target) {
+                continue;
+            }
+
+            const scripts = Object.create(null);
+            const procedures = Object.create(null);
+
+            for (const [procedureVariant, procedureData] of Object.entries(targetData.procedures || {})) {
+                procedures[procedureVariant] = compilerExecute.scopedEval(procedureData.factorySource);
+            }
+
+            for (const [topBlockId, scriptData] of Object.entries(targetData.scripts || {})) {
+                scripts[topBlockId] = {
+                    startingFunction: compilerExecute.scopedEval(scriptData.factorySource),
+                    executableHat: !!scriptData.executableHat
+                };
+            }
+
+            target.compiledScripts = scripts;
+            target.compiledProcedures = procedures;
+            this._compiledTargetScripts.set(target.id, {
+                scripts,
+                procedures
+            });
+
+            for (const hatData of (targetData.hats || [])) {
+                const compiledHat = {
+                    targetId: target.id,
+                    topBlockId: hatData.topBlockId,
+                    fieldsOfInputs: hatData.fieldsOfInputs || {}
+                };
+                if (!this._compiledHats.has(hatData.opcode)) {
+                    this._compiledHats.set(hatData.opcode, []);
+                }
+                this._compiledHats.get(hatData.opcode).push(compiledHat);
+            }
+        }
+    }
+
+    getCompiledScript (target, topBlockId) {
+        if (!target) {
+            return null;
+        }
+        const targetData = this._compiledTargetScripts.get(target.id);
+        if (!targetData) {
+            return null;
+        }
+        const script = targetData.scripts[topBlockId];
+        if (!script) {
+            return null;
+        }
+        return {
+            script,
+            procedures: targetData.procedures
+        };
+    }
+
+    inheritCompiledProjectData (newTarget, sourceTarget) {
+        if (!newTarget || !sourceTarget) {
+            return;
+        }
+        const sourceCompiledData = this._compiledTargetScripts.get(sourceTarget.id);
+        if (!sourceCompiledData) {
+            return;
+        }
+
+        newTarget.compiledScripts = sourceCompiledData.scripts;
+        newTarget.compiledProcedures = sourceCompiledData.procedures;
+        this._compiledTargetScripts.set(newTarget.id, sourceCompiledData);
+
+        for (const [opcode, scripts] of this._compiledHats.entries()) {
+            const inheritedScripts = scripts
+                .filter(script => script.targetId === sourceTarget.id)
+                .map(script => ({
+                    targetId: newTarget.id,
+                    topBlockId: script.topBlockId,
+                    fieldsOfInputs: script.fieldsOfInputs
+                }));
+            if (inheritedScripts.length > 0) {
+                scripts.push(...inheritedScripts);
+            }
+        }
+    }
+
+    removeCompiledProjectDataForTarget (target) {
+        if (!target) {
+            return;
+        }
+        this._compiledTargetScripts.delete(target.id);
+        delete target.compiledScripts;
+        delete target.compiledProcedures;
+        for (const [opcode, scripts] of this._compiledHats.entries()) {
+            const filteredScripts = scripts.filter(script => script.targetId !== target.id);
+            if (filteredScripts.length === 0) {
+                this._compiledHats.delete(opcode);
+            } else if (filteredScripts.length !== scripts.length) {
+                this._compiledHats.set(opcode, filteredScripts);
+            }
+        }
     }
 
     /**
@@ -2069,7 +2214,8 @@ class Runtime extends EventEmitter {
         }
 
         // tw: compile new threads. Do not attempt to compile monitor threads.
-        if (!(opts && opts.updateMonitor) && this.compilerOptions.enabled) {
+        if (!(opts && opts.updateMonitor) &&
+            (this.compilerOptions.enabled || this.getCompiledScript(target, id))) {
             thread.tryCompile();
         }
 
@@ -2102,7 +2248,8 @@ class Runtime extends EventEmitter {
         newThread.blockContainer = thread.blockContainer;
         newThread.pushStack(thread.topBlock);
         // tw: when a thread is restarted, we have to check whether the previous script was attempted to be compiled.
-        if (thread.triedToCompile && this.compilerOptions.enabled) {
+        if (thread.triedToCompile &&
+            (this.compilerOptions.enabled || this.getCompiledScript(newThread.target, newThread.topBlock))) {
             newThread.tryCompile();
         }
         if (!newThread.stackClick && !newThread.updateMonitor) {
@@ -2228,9 +2375,25 @@ class Runtime extends EventEmitter {
         }
         for (let t = targets.length - 1; t >= 0; t--) {
             const target = targets[t];
-            const scripts = BlocksRuntimeCache.getScripts(target.blocks, opcode);
-            for (let j = 0; j < scripts.length; j++) {
-                f(scripts[j], target);
+            if (!this._compiledTargetScripts.has(target.id)) {
+                const scripts = BlocksRuntimeCache.getScripts(target.blocks, opcode);
+                for (let j = 0; j < scripts.length; j++) {
+                    f(scripts[j], target);
+                }
+            }
+            const compiledScripts = this._compiledHats.get(opcode);
+            if (!compiledScripts) {
+                continue;
+            }
+            for (let j = 0; j < compiledScripts.length; j++) {
+                const script = compiledScripts[j];
+                if (script.targetId !== target.id) {
+                    continue;
+                }
+                f({
+                    blockId: script.topBlockId,
+                    fieldsOfInputs: script.fieldsOfInputs
+                }, target);
             }
         }
     }
@@ -2331,6 +2494,7 @@ class Runtime extends EventEmitter {
      */
     dispose () {
         this.stopAll();
+        this.clearCompiledProjectData();
         // Deleting each target's variable's monitors.
         this.targets.forEach(target => {
             if (target.isOriginal) target.deleteMonitors();
@@ -3321,6 +3485,9 @@ class Runtime extends EventEmitter {
      * @fires Runtime#targetWasCreated
      */
     fireTargetWasCreated (newTarget, sourceTarget) {
+        if (sourceTarget) {
+            this.inheritCompiledProjectData(newTarget, sourceTarget);
+        }
         this.emit('targetWasCreated', newTarget, sourceTarget);
     }
 
@@ -3330,6 +3497,7 @@ class Runtime extends EventEmitter {
      * @fires Runtime#targetWasRemoved
      */
     fireTargetWasRemoved (target) {
+        this.removeCompiledProjectDataForTarget(target);
         this.emit('targetWasRemoved', target);
     }
 

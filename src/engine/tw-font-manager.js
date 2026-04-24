@@ -38,6 +38,20 @@ const addOrUpdateFont = (fonts, newFont) => {
     return oldFont;
 };
 
+const hasFontMagic = asset => {
+    if (!asset || !asset.data || asset.data.length < 4) {
+        return false;
+    }
+    const bytes = asset.data instanceof Uint8Array ? asset.data : new Uint8Array(asset.data);
+    const signatures = [
+        [0x00, 0x01, 0x00, 0x00],
+        [0x4F, 0x54, 0x54, 0x4F],
+        [0x77, 0x4F, 0x46, 0x46],
+        [0x77, 0x4F, 0x46, 0x32]
+    ];
+    return signatures.some(signature => signature.every((value, index) => bytes[index] === value));
+};
+
 class FontManager extends EventEmitter {
     /**
      * @param {Runtime} runtime
@@ -305,6 +319,10 @@ class FontManager extends EventEmitter {
                         this.runtime.storage.AssetType.Font,
                         md5ext
                     );
+                    if (!hasFontMagic(asset)) {
+                        log.warn(`Skipping invalid custom font asset: ${md5ext}`);
+                        continue;
+                    }
                     this.addCustomFont(family, fallback, asset);
                 }
             } catch (e) {
