@@ -20,15 +20,20 @@ const parseURL = url => {
 };
 
 /**
- * Sets up the global.Scratch API for an unsandboxed extension.
+ * Create the Scratch APIs for an unsandboxed extension without exposing them globally.
  * @param {VirtualMachine} vm
- * @returns {Promise<object[]>} Resolves with a list of extension objects when Scratch.extensions.register is called.
+ * @returns {{promise: Promise<object[]>, Scratch: object, ScratchExtensions: object}}
  */
-const setupUnsandboxedExtensionAPI = vm => new Promise(resolve => {
+const createUnsandboxedExtensionAPI = vm => {
     const extensionObjects = [];
+    let resolveExtensionObjects;
+    const promise = new Promise(resolve => {
+        resolveExtensionObjects = resolve;
+    });
+
     const register = extensionObject => {
         extensionObjects.push(extensionObject);
-        resolve(extensionObjects);
+        resolveExtensionObjects(extensionObjects);
     };
 
     // Create a new copy of global.Scratch for each extension
@@ -154,21 +159,271 @@ const setupUnsandboxedExtensionAPI = vm => new Promise(resolve => {
 
     Scratch.translate = createTranslate(vm);
 
-    global.Scratch = Scratch;
-    global.ScratchExtensions = createScratchX(Scratch);
+    const ScratchExtensions = createScratchX(Scratch);
 
     vm.emit('CREATE_UNSANDBOXED_EXTENSION_API', Scratch);
-});
+
+    return {
+        promise,
+        Scratch,
+        ScratchExtensions
+    };
+};
+
+/**
+ * Sets up the global.Scratch API for an unsandboxed extension.
+ * @param {VirtualMachine} vm
+ * @returns {Promise<object[]>} Resolves with a list of extension objects when Scratch.extensions.register is called.
+ */
+const setupUnsandboxedExtensionAPI = vm => {
+    const api = createUnsandboxedExtensionAPI(vm);
+    global.Scratch = api.Scratch;
+    global.ScratchExtensions = api.ScratchExtensions;
+    return api.promise;
+};
 
 /**
  * Disable the existing global.Scratch unsandboxed extension APIs.
  * This helps debug poorly designed extensions.
  */
 const teardownUnsandboxedExtensionAPI = () => {
-    // We can assume global.Scratch already exists.
+    if (!global.Scratch || !global.Scratch.extensions) {
+        return;
+    }
     global.Scratch.extensions.register = () => {
         throw new Error('Too late to register new extensions.');
     };
+};
+
+const shouldUsePrivateUnsandboxedExtensionAPI = async (extensionURL, vm) => {
+    if (!vm.securityManager || typeof vm.securityManager.usePrivateUnsandboxedExtensionAPI !== 'function') {
+        return false;
+    }
+    return Boolean(await vm.securityManager.usePrivateUnsandboxedExtensionAPI(extensionURL));
+};
+
+const fetchUnsandboxedExtensionSource = async extensionURL => {
+    const staticFetchResult = staticFetch(extensionURL);
+    if (staticFetchResult) {
+        return staticFetchResult.text();
+    }
+
+    const response = await fetch(extensionURL);
+    if (!response.ok) {
+        throw new Error(`Failed to fetch unsandboxed extension source: ${response.status}`);
+    }
+    return response.text();
+};
+
+const BOUND_WINDOW_METHODS = new Set([
+    'atob',
+    'btoa',
+    'fetch',
+    'open',
+    'alert',
+    'confirm',
+    'prompt',
+    'addEventListener',
+    'removeEventListener',
+    'dispatchEvent',
+    'setTimeout',
+    'clearTimeout',
+    'setInterval',
+    'clearInterval',
+    'requestAnimationFrame',
+    'cancelAnimationFrame',
+    'queueMicrotask',
+    'postMessage',
+    'matchMedia',
+    'getComputedStyle'
+]);
+
+const createPrivateExtensionWindow = (Scratch, ScratchExtensions) => {
+    const localOverrides = new Map([
+        ['Scratch', Scratch],
+        ['ScratchExtensions', ScratchExtensions]
+    ]);
+
+    let privateWindow = null;
+    const getWindowLikeSelf = prop => (
+        prop === 'window' ||
+        prop === 'self' ||
+        prop === 'globalThis' ||
+        prop === 'top' ||
+        prop === 'parent' ||
+        prop === 'frames'
+    );
+
+    privateWindow = new Proxy(global, {
+        get: (target, prop) => {
+            if (getWindowLikeSelf(prop)) {
+                return privateWindow;
+            }
+            if (localOverrides.has(prop)) {
+                return localOverrides.get(prop);
+            }
+            const value = Reflect.get(target, prop, target);
+            if (typeof prop === 'string' && typeof value === 'function' && BOUND_WINDOW_METHODS.has(prop)) {
+                return value.bind(target);
+            }
+            return value;
+        },
+        set: (target, prop, value) => {
+            if (getWindowLikeSelf(prop)) {
+                return true;
+            }
+            if (prop === 'Scratch' || prop === 'ScratchExtensions') {
+                localOverrides.set(prop, value);
+                return true;
+            }
+            return Reflect.set(target, prop, value, target);
+        },
+        has: (target, prop) => localOverrides.has(prop) || getWindowLikeSelf(prop) || Reflect.has(target, prop),
+        getOwnPropertyDescriptor: (target, prop) => {
+            if (getWindowLikeSelf(prop)) {
+                return {
+                    configurable: true,
+                    enumerable: false,
+                    writable: true,
+                    value: privateWindow
+                };
+            }
+            if (localOverrides.has(prop)) {
+                return {
+                    configurable: true,
+                    enumerable: false,
+                    writable: true,
+                    value: localOverrides.get(prop)
+                };
+            }
+            return Object.getOwnPropertyDescriptor(target, prop);
+        }
+    });
+
+    return privateWindow;
+};
+
+const temporarilyExposePrivateScratchAPI = (Scratch, ScratchExtensions, callback) => {
+    const previousScratchDescriptor = Object.getOwnPropertyDescriptor(global, 'Scratch');
+    const previousScratchExtensionsDescriptor = Object.getOwnPropertyDescriptor(global, 'ScratchExtensions');
+
+    Object.defineProperty(global, 'Scratch', {
+        configurable: true,
+        enumerable: false,
+        writable: true,
+        value: Scratch
+    });
+    Object.defineProperty(global, 'ScratchExtensions', {
+        configurable: true,
+        enumerable: false,
+        writable: true,
+        value: ScratchExtensions
+    });
+
+    try {
+        return callback();
+    } finally {
+        if (previousScratchDescriptor) {
+            Object.defineProperty(global, 'Scratch', previousScratchDescriptor);
+        } else {
+            delete global.Scratch;
+        }
+
+        if (previousScratchExtensionsDescriptor) {
+            Object.defineProperty(global, 'ScratchExtensions', previousScratchExtensionsDescriptor);
+        } else {
+            delete global.ScratchExtensions;
+        }
+    }
+};
+
+const executeUnsandboxedExtensionInPrivateContext = (source, extensionURL, Scratch, ScratchExtensions) => {
+    const privateWindow = createPrivateExtensionWindow(Scratch, ScratchExtensions);
+    temporarilyExposePrivateScratchAPI(Scratch, ScratchExtensions, () => {
+        const executor = new Function(
+            'window',
+            'self',
+            'globalThis',
+            'top',
+            'parent',
+            'frames',
+            'Scratch',
+            'ScratchExtensions',
+            `${source}\n//# sourceURL=${extensionURL}`
+        );
+        executor.call(
+            global,
+            privateWindow,
+            privateWindow,
+            privateWindow,
+            privateWindow,
+            privateWindow,
+            privateWindow,
+            Scratch,
+            ScratchExtensions
+        );
+    });
+};
+
+const executeUnsandboxedExtensionInSharedContext = (source, extensionURL, Scratch, ScratchExtensions) => {
+    const executor = new Function(
+        'Scratch',
+        'ScratchExtensions',
+        `${source}\n//# sourceURL=${extensionURL}`
+    );
+    executor.call(global, Scratch, ScratchExtensions);
+};
+
+const loadUnsandboxedExtensionWithPrivateScratch = async (extensionURL, vm) => {
+    const api = createUnsandboxedExtensionAPI(vm);
+    let source;
+
+    try {
+        source = await fetchUnsandboxedExtensionSource(extensionURL);
+    } catch (error) {
+        throw new Error(`Error fetching unsandboxed script ${extensionURL}: ${error.message}`);
+    }
+
+    try {
+        executeUnsandboxedExtensionInPrivateContext(
+            source,
+            extensionURL,
+            api.Scratch,
+            api.ScratchExtensions
+        );
+    } catch (error) {
+        throw new Error(`Error in unsandboxed script ${extensionURL}. Check the console for more information.`);
+    }
+
+    return api.promise;
+};
+
+const loadUnsandboxedExtensionWithSharedGlobal = async (extensionURL, vm) => {
+    const api = createUnsandboxedExtensionAPI(vm);
+    global.Scratch = api.Scratch;
+    global.ScratchExtensions = api.ScratchExtensions;
+
+    let source;
+    try {
+        source = await fetchUnsandboxedExtensionSource(extensionURL);
+    } catch (error) {
+        throw new Error(`Error fetching unsandboxed script ${extensionURL}: ${error.message}`);
+    }
+
+    try {
+        executeUnsandboxedExtensionInSharedContext(
+            source,
+            extensionURL,
+            api.Scratch,
+            api.ScratchExtensions
+        );
+    } catch (error) {
+        throw new Error(`Error in unsandboxed script ${extensionURL}. Check the console for more information.`);
+    }
+
+    const objects = await api.promise;
+    teardownUnsandboxedExtensionAPI();
+    return objects;
 };
 
 /**
@@ -177,21 +432,14 @@ const teardownUnsandboxedExtensionAPI = () => {
  * @param {Virtualmachine} vm
  * @returns {Promise<object[]>} Resolves with a list of extension objects if the extension was loaded successfully.
  */
-const loadUnsandboxedExtension = (extensionURL, vm) => new Promise((resolve, reject) => {
-    setupUnsandboxedExtensionAPI(vm).then(resolve);
+const loadUnsandboxedExtension = async (extensionURL, vm) => {
+    if (await shouldUsePrivateUnsandboxedExtensionAPI(extensionURL, vm)) {
+        return loadUnsandboxedExtensionWithPrivateScratch(extensionURL, vm);
+    }
+    return loadUnsandboxedExtensionWithSharedGlobal(extensionURL, vm);
+};
 
-    const script = document.createElement('script');
-    script.onerror = () => {
-        reject(new Error(`Error in unsandboxed script ${extensionURL}. Check the console for more information.`));
-    };
-    script.src = extensionURL;
-    document.body.appendChild(script);
-}).then(objects => {
-    teardownUnsandboxedExtensionAPI();
-    return objects;
-});
-
-// Because loading unsandboxed extensions requires messing with global state (global.Scratch),
+// Because loading unsandboxed extensions may still require shared runtime state,
 // only let one extension load at a time.
 const limiter = new AsyncLimiter(loadUnsandboxedExtension, 1);
 const load = (extensionURL, vm) => limiter.do(extensionURL, vm);

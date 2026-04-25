@@ -162,6 +162,16 @@ class SecurityManager {
     canDownload (resourceURL, name) {
         return Promise.resolve(true);
     }
+
+    /**
+     * Determine whether an unsandboxed extension should receive a private Scratch global
+     * instead of inheriting the host page's global Scratch object.
+     * @param {string} extensionURL The URL of the custom extension.
+     * @returns {Promise<boolean>|boolean}
+     */
+    usePrivateUnsandboxedExtensionAPI (extensionURL) {
+        return Promise.resolve(false);
+    }
 }
 
 module.exports = SecurityManager;
