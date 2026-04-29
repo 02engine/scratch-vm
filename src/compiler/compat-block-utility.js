@@ -1,16 +1,13 @@
-// @ts-check
-
 const BlockUtility = require('../engine/block-utility');
 
 class CompatibilityLayerBlockUtility extends BlockUtility {
     constructor () {
         super();
-        this._stackFrame = {};
         this._startedBranch = null;
     }
 
     get stackFrame () {
-        return this.thread?.compatibilityStackFrame;
+        return this.thread.compatibilityStackFrame;
     }
 
     startBranch (branchNumber, isLoop) {

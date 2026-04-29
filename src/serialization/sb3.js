@@ -1318,6 +1318,8 @@ const parseScratchObject = function (object, runtime, extensions, zip, assets) {
     }
     Promise.all(costumePromises).then(costumes => {
         sprite.costumes = costumes;
+        // Request targets update to refresh GUI when costumes are loaded
+        runtime.requestTargetsUpdate(target);
     });
     Promise.all(soundPromises).then(sounds => {
         sprite.sounds = sounds;
@@ -1448,6 +1450,25 @@ const deserializeMonitor = function (monitorData, runtime, targets, extensions) 
 // This is to fix up projects imported from 2.0 where xml-unsafe names
 // were getting added to the variable ids.
 const replaceUnsafeCharsInVariableIds = function (targets) {
+    // Fast path: most projects already have safe IDs.
+    // Avoid the expensive full-project reference scan unless we actually need it.
+    let needsFix = false;
+    for (let i = 0; i < targets.length; i++) {
+        const target = targets[i];
+        const variables = target && target.variables;
+        if (!variables) continue;
+        const ids = Object.keys(variables);
+        for (let j = 0; j < ids.length; j++) {
+            const id = ids[j];
+            if (StringUtil.replaceUnsafeChars(id) !== id) {
+                needsFix = true;
+                break;
+            }
+        }
+        if (needsFix) break;
+    }
+    if (!needsFix) return targets;
+
     const allVarRefs = VariableUtil.getAllVarRefsForTargets(targets, true);
     // Re-id the variables in the actual targets
     targets.forEach(t => {
@@ -1525,20 +1546,6 @@ const deserialize = async function (json, runtime, zip, isSingleSprite) {
     } else {
         // eslint-disable-next-line require-atomic-updates
         runtime.origin = null;
-    }
-
-    // Restore platform data from meta.platform, including git information
-    if (json.meta && json.meta.platform) {
-        // eslint-disable-next-line require-atomic-updates
-        runtime.platform = Object.assign({}, runtime.platform, json.meta.platform);
-    } else {
-        // If no platform data in meta, reset git data to defaults
-        // eslint-disable-next-line require-atomic-updates
-        runtime.platform.git = {
-            repository: null,
-            lastCommit: null,
-            lastFetch: null
-        };
     }
 
     // Extract custom extension IDs, if they exist.

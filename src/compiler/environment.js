@@ -1,4 +1,3 @@
-// @ts-check
 /* eslint-disable no-eval */
 
 /**

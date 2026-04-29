@@ -6,6 +6,7 @@ if (typeof TextEncoder === 'undefined') {
 }
 const EventEmitter = require('events');
 const JSZip = require('@turbowarp/jszip');
+
 const Buffer = require('buffer').Buffer;
 const centralDispatch = require('./dispatch/central-dispatch');
 const ExtensionManager = require('./extension-support/extension-manager');
@@ -29,6 +30,19 @@ const Base64Util = require('./util/base64-util');
 
 const RESERVED_NAMES = ['_mouse_', '_stage_', '_edge_', '_myself_', '_random_'];
 
+if (typeof document === 'undefined') {
+    global.document = {
+        createElement: tagName => {
+            if (String(tagName).toLowerCase() !== 'canvas') return {};
+            return {
+                getContext: () => null,
+                width: 0,
+                height: 0
+            };
+        }
+    };
+}
+
 const CORE_EXTENSIONS = [
     // 'motion',
     // 'looks',
@@ -46,34 +60,32 @@ formatMessage.setup({
     missingTranslation: 'ignore'
 });
 
+const safePerformanceMark = name => {
+    if (typeof performance === 'undefined' || typeof performance.mark !== 'function') return;
+    try {
+        performance.mark(name);
+    } catch (e) {
+        // Ignore
+    }
+};
+
+const safePerformanceMeasure = (name, startMark, endMark) => {
+    if (typeof performance === 'undefined' || typeof performance.measure !== 'function') return;
+    try {
+        performance.measure(name, startMark, endMark);
+    } catch (e) {
+        // performance.measure() can throw if either mark was GC'd or missing.
+        log.error(e);
+    }
+};
+
 const createRuntimeService = runtime => {
     const service = {};
     service._refreshExtensionPrimitives = runtime._refreshExtensionPrimitives.bind(runtime);
     service._registerExtensionPrimitives = runtime._registerExtensionPrimitives.bind(runtime);
+    service._unregisterExtensionPrimitives = runtime._unregisterExtensionPrimitives.bind(runtime);
+    service._setExtensionOrder = runtime._setExtensionOrder.bind(runtime);
     return service;
-};
-
-const cloneCompiledTargetSnapshot = targetJSON => {
-    const clonedTarget = JSON.parse(JSON.stringify(targetJSON));
-    const COMMENT_CONFIG_MAGIC = ' // _twconfig_';
-    const preservedComments = {};
-
-    if (clonedTarget.comments && typeof clonedTarget.comments === 'object') {
-        for (const [commentId, comment] of Object.entries(clonedTarget.comments)) {
-            if (
-                comment &&
-                typeof comment.text === 'string' &&
-                comment.text.includes(COMMENT_CONFIG_MAGIC)
-            ) {
-                preservedComments[commentId] = comment;
-            }
-        }
-    }
-
-    clonedTarget.blocks = {};
-    clonedTarget.comments = preservedComments;
-    delete clonedTarget.targetPaneOrder;
-    return clonedTarget;
 };
 
 /**
@@ -89,6 +101,9 @@ class VirtualMachine extends EventEmitter {
          * @type {!Runtime}
          */
         this.runtime = new Runtime();
+        // Allow the runtime (and compiled jsexecute helper functions) to resolve back to the VM.
+        // This is used for runtimeOptions access inside compiled code.
+        this.runtime.vm = this;
         centralDispatch.setService('runtime', createRuntimeService(this.runtime)).catch(e => {
             log.error(`Failed to register runtime service: ${JSON.stringify(e)}`);
         });
@@ -149,6 +164,12 @@ class VirtualMachine extends EventEmitter {
         this.runtime.on(Runtime.EXTENSION_ADDED, categoryInfo => {
             this.emit(Runtime.EXTENSION_ADDED, categoryInfo);
         });
+        this.runtime.on(Runtime.EXTENSION_REMOVED, info => {
+            this.emit(Runtime.EXTENSION_REMOVED, info);
+        });
+        this.runtime.on(Runtime.EXTENSIONS_REORDERED, info => {
+            this.emit(Runtime.EXTENSIONS_REORDERED, info);
+        });
         this.runtime.on(Runtime.EXTENSION_FIELD_ADDED, (fieldName, fieldImplementation) => {
             this.emit(Runtime.EXTENSION_FIELD_ADDED, fieldName, fieldImplementation);
         });
@@ -203,9 +224,6 @@ class VirtualMachine extends EventEmitter {
         this.runtime.on(Runtime.FRAMERATE_CHANGED, framerate => {
             this.emit(Runtime.FRAMERATE_CHANGED, framerate);
         });
-        this.runtime.on(Runtime.OPSPERFRAME_CHANGED, opsPerFrame => {
-            this.emit(Runtime.OPSPERFRAME_CHANGED, opsPerFrame);
-        });
         this.runtime.on(Runtime.INTERPOLATION_CHANGED, framerate => {
             this.emit(Runtime.INTERPOLATION_CHANGED, framerate);
         });
@@ -246,7 +264,6 @@ class VirtualMachine extends EventEmitter {
             Sprite,
             RenderedTarget,
             JSZip,
-            Variable,
 
             i_will_not_ask_for_help_when_these_break: () => {
                 console.warn('You are using unsupported APIs. WHEN your code breaks, do not expect help.');
@@ -313,13 +330,6 @@ class VirtualMachine extends EventEmitter {
         this.runtime.setCompatibilityMode(!!compatibilityModeOn);
     }
 
-    setOpsPerFrame (framerate) {
-        this.runtime.setOpsPerFrame(framerate);
-    }
-    getOpsPerFrame () {
-        return this.runtime.getOpsPerFrame();
-    }
-
     setFramerate (framerate) {
         this.runtime.setFramerate(framerate);
     }
@@ -356,8 +366,8 @@ class VirtualMachine extends EventEmitter {
         return this.runtime.getAddonBlock(procedureCode);
     }
 
-    storeProjectOptions () {
-        this.runtime.storeProjectOptions();
+    storeProjectOptions (extraOptions = null) {
+        this.runtime.storeProjectOptions(extraOptions);
         if (this.editingTarget.isStage) {
             this.emitWorkspaceUpdate();
         }
@@ -366,6 +376,11 @@ class VirtualMachine extends EventEmitter {
     enableDebug () {
         this.runtime.enableDebug();
         return 'enabled debug mode';
+    }
+
+    disableDebug () {
+        this.runtime.disableDebug();
+        return 'disabled debug mode';
     }
 
     handleExtensionButtonPress (buttonData) {
@@ -475,7 +490,6 @@ class VirtualMachine extends EventEmitter {
             // TODO not sure if we need to check that it also isn't a data view
             input = JSON.stringify(input);
         }
-
         const validationPromise = new Promise((resolve, reject) => {
             const validate = require('scratch-parser');
             // The second argument of false below indicates to the validator that the
@@ -516,201 +530,13 @@ class VirtualMachine extends EventEmitter {
         return validationPromise
             .then(validatedInput => this.deserializeProject(validatedInput[0], validatedInput[1]))
             .then(() => this.runtime.handleProjectLoaded())
+            .then(result => result)
             .catch(error => {
                 // Intentionally rejecting here (want errors to be handled by caller)
                 if (Object.prototype.hasOwnProperty.call(error, 'validationError')) {
                     return Promise.reject(JSON.stringify(error));
                 }
                 return Promise.reject(error);
-            });
-    }
-
-    /**
-     * Load a compiled project bundle generated by the 02Engine packager.
-     * @param {string|object} input JSON string or compiled project object.
-     * @param {?JSZip} assetArchive Optional zipped project containing assets to be loaded.
-     * @returns {Promise} Promise that resolves after the compiled project has loaded.
-     */
-    loadCompiledProject (input, assetArchive) {
-        let compiledProject = input;
-        if (typeof compiledProject === 'string') {
-            compiledProject = JSON.parse(compiledProject);
-        }
-        if (!compiledProject || compiledProject.format !== '02engine-compiled-project') {
-            return Promise.reject(new Error('Invalid compiled project format.'));
-        }
-
-        const sb3 = require('./serialization/sb3');
-        const runtime = this.runtime;
-        const projectJSON = {
-            projectVersion: 3,
-            targets: compiledProject.targets || [],
-            monitors: compiledProject.monitors || [],
-            extensionURLs: compiledProject.extensionURLs || {},
-            meta: compiledProject.meta || {}
-        };
-
-        if (compiledProject.customFonts) {
-            projectJSON.customFonts = compiledProject.customFonts;
-        }
-        if (compiledProject.extensionStorage) {
-            projectJSON.extensionStorage = compiledProject.extensionStorage;
-        }
-
-        this.clear();
-
-        return sb3.deserialize(projectJSON, runtime, assetArchive || null)
-            .then(({targets, extensions}) => {
-                const mergedExtensions = {
-                    extensionIDs: new Set([
-                        ...extensions.extensionIDs,
-                        ...(compiledProject.extensions || [])
-                    ]),
-                    extensionURLs: new Map(extensions.extensionURLs)
-                };
-
-                if (compiledProject.extensionURLs) {
-                    for (const [id, url] of Object.entries(compiledProject.extensionURLs)) {
-                        mergedExtensions.extensionURLs.set(id, url);
-                    }
-                }
-
-                return this.installTargets(targets, mergedExtensions, true);
-            })
-            .then(() => {
-                this.runtime.installCompiledProjectData(compiledProject);
-                this.runtime.handleProjectLoaded();
-                this.runtime.setCompilerOptions({
-                    enabled: false,
-                    warpTimer: this.runtime.compilerOptions.warpTimer
-                });
-            });
-    }
-
-    /**
-     * Compile an already parsed project.json into a compiled runtime bundle.
-     * @param {object} projectJSON Parsed project JSON.
-     * @param {?JSZip} zip Original project archive for loading assets during compilation.
-     * @returns {Promise<object>} Compiled project bundle.
-     */
-    compileProjectFromJSON (projectJSON, zip) {
-        const sb3 = require('./serialization/sb3');
-        const compile = require('./compiler/compile');
-        const RuntimeScriptCache = require('./engine/blocks-runtime-cache')._RuntimeScriptCache;
-        const Thread = require('./engine/thread');
-        const runtime = this.runtime;
-
-        this.clear();
-
-        return sb3.deserialize(projectJSON, runtime, zip || null)
-            .then(({targets, extensions}) => this.installTargets(targets, extensions, true)
-                .then(() => extensions))
-            .then(extensions => {
-                const compiledProject = {
-                    format: '02engine-compiled-project',
-                    version: 1,
-                    projectVersion: 3,
-                    targets: (projectJSON.targets || []).map(cloneCompiledTargetSnapshot),
-                    monitors: JSON.parse(JSON.stringify(projectJSON.monitors || [])),
-                    extensions: Array.from(projectJSON.extensions || []),
-                    extensionURLs: Object.assign({}, projectJSON.extensionURLs || {}),
-                    meta: JSON.parse(JSON.stringify(projectJSON.meta || {})),
-                    compiledTargets: {}
-                };
-
-                const serializedFonts = runtime.fontManager.serializeJSON();
-                if (serializedFonts) {
-                    compiledProject.customFonts = JSON.parse(JSON.stringify(serializedFonts));
-                }
-
-                if (projectJSON.extensionStorage) {
-                    compiledProject.extensionStorage = JSON.parse(JSON.stringify(projectJSON.extensionStorage));
-                }
-
-                for (const extensionId of extensions.extensionIDs) {
-                    if (!compiledProject.extensions.includes(extensionId)) {
-                        compiledProject.extensions.push(extensionId);
-                    }
-                }
-
-                for (const [extensionId, extensionURL] of extensions.extensionURLs.entries()) {
-                    compiledProject.extensionURLs[extensionId] = extensionURL;
-                }
-
-                const originalTargets = this.runtime.targets.filter(target => target.isOriginal);
-                for (let targetIndex = 0; targetIndex < originalTargets.length; targetIndex++) {
-                    const target = originalTargets[targetIndex];
-                    const sourceTarget = (projectJSON.targets || [])[targetIndex] || null;
-
-                    const targetBundle = {
-                        targetIndex,
-                        name: sourceTarget && sourceTarget.name,
-                        isStage: !!(sourceTarget && sourceTarget.isStage),
-                        scripts: {},
-                        procedures: {},
-                        hats: []
-                    };
-
-                    for (const topBlockId of target.blocks.getScripts()) {
-                        const topBlock = target.blocks.getBlock(topBlockId);
-                        if (!topBlock) {
-                            continue;
-                        }
-
-                        const thread = new Thread(topBlockId);
-                        thread.target = target;
-                        thread.blockContainer = target.blocks;
-
-                        let result;
-                        try {
-                            result = compile.asSources(thread);
-                        } catch (error) {
-                            const canBeVisualReport = !runtime.getIsHat(topBlock.opcode) &&
-                                topBlock.opcode !== 'procedures_definition';
-                            if (!canBeVisualReport) {
-                                throw error;
-                            }
-
-                            const probeThread = new Thread(topBlockId);
-                            probeThread.target = target;
-                            probeThread.blockContainer = target.blocks;
-                            probeThread.stackClick = true;
-
-                            try {
-                                compile.asSources(probeThread);
-                                continue;
-                            } catch (probeError) {
-                                throw error;
-                            }
-                        }
-
-                        targetBundle.scripts[topBlockId] = {
-                            factorySource: result.startingFunction.factorySource,
-                            executableHat: result.executableHat
-                        };
-
-                        for (const [procedureVariant, procedureData] of Object.entries(result.procedures)) {
-                            if (!targetBundle.procedures[procedureVariant]) {
-                                targetBundle.procedures[procedureVariant] = {
-                                    factorySource: procedureData.factorySource
-                                };
-                            }
-                        }
-
-                        if (runtime.getIsHat(topBlock.opcode)) {
-                            const scriptCache = new RuntimeScriptCache(target.blocks, topBlockId);
-                            targetBundle.hats.push({
-                                topBlockId,
-                                opcode: topBlock.opcode,
-                                fieldsOfInputs: scriptCache.fieldsOfInputs
-                            });
-                        }
-                    }
-
-                    compiledProject.compiledTargets[targetIndex] = targetBundle;
-                }
-
-                return compiledProject;
             });
     }
 
@@ -736,10 +562,12 @@ class VirtualMachine extends EventEmitter {
     }
 
     /**
+     * @param {object} [options] Options for saving the project
+     * @param {boolean} [options.allowOptimization=true] Whether to optimize block and comment IDs
      * @returns {JSZip} JSZip zip object representing the sb3.
      */
-    _saveProjectZip () {
-        const projectJson = this.toJSON();
+    _saveProjectZip (options = {}) {
+        const projectJson = this.toJSON(null, options);
 
         // TODO want to eventually move zip creation out of here, and perhaps
         // into scratch-storage
@@ -758,44 +586,32 @@ class VirtualMachine extends EventEmitter {
             file.date = date;
         }
 
-        // Tell JSZip to only compress file formats where there will be a significant gain.
-        const COMPRESSABLE_FORMATS = [
-            '.json',
-            '.svg',
-            '.wav',
-            '.ttf',
-            '.otf'
-        ];
-        for (const file of Object.values(zip.files)) {
-            if (COMPRESSABLE_FORMATS.some(ext => file.name.endsWith(ext))) {
-                file.options.compression = 'DEFLATE';
-            } else {
-                file.options.compression = 'STORE';
-            }
-        }
-
         return zip;
     }
 
     /**
      * @param {JSZip.OutputType} [type] JSZip output type. Defaults to 'blob' for Scratch compatibility.
+     * @param {object} [options] Options for saving the project
+     * @param {boolean} [options.allowOptimization=true] Whether to optimize block and comment IDs
      * @returns {Promise<unknown>} Compressed sb3 file in a type determined by the type argument.
      */
-    saveProjectSb3 (type) {
-        return this._saveProjectZip().generateAsync({
-            // Don't configure compression here. _saveProjectZip() will set it for each file.
+    saveProjectSb3 (type, options) {
+        return this._saveProjectZip(options).generateAsync({
             type: type || 'blob',
-            mimeType: 'application/x.scratch.sb3'
+            mimeType: 'application/x.scratch.sb3',
+            compression: 'DEFLATE'
         });
     }
 
     /**
      * @param {JSZip.OutputType} [type] JSZip output type. Defaults to 'arraybuffer'.
+     * @param {object} [options] Options for saving the project
+     * @param {boolean} [options.allowOptimization=true] Whether to optimize block and comment IDs
      * @returns {StreamHelper} JSZip StreamHelper object generating the compressed sb3.
      * See: https://stuk.github.io/jszip/documentation/api_streamhelper.html
      */
-    saveProjectSb3Stream (type) {
-        return this._saveProjectZip().generateInternalStream({
+    saveProjectSb3Stream (type, options) {
+        return this._saveProjectZip(options).generateInternalStream({
             type: type || 'arraybuffer',
             mimeType: 'application/x.scratch.sb3',
             compression: 'DEFLATE'
@@ -806,10 +622,12 @@ class VirtualMachine extends EventEmitter {
      * tw: Serialize the project into a map of files without actually zipping the project.
      * The buffers returned are the exact same ones used internally, not copies. Avoid directly
      * manipulating them (except project.json, which is created by this function).
+     * @param {object} [options] Options for saving the project
+     * @param {boolean} [options.allowOptimization=true] Whether to optimize block and comment IDs
      * @returns {Record<string, Uint8Array>} Map of file name to the raw data for that file.
      */
-    saveProjectSb3DontZip () {
-        const projectJson = this.toJSON();
+    saveProjectSb3DontZip (options) {
+        const projectJson = this.toJSON(null, options);
 
         const files = {
             'project.json': new _TextEncoder().encode(projectJson)
@@ -925,18 +743,7 @@ class VirtualMachine extends EventEmitter {
         // Clear the current runtime
         this.clear();
 
-        // Clear Git data when loading new project to prevent data from previous project
-        if (this.runtime && this.runtime.platform && this.runtime.platform.git) {
-            this.runtime.platform.git = {
-                repository: null,
-                lastCommit: null,
-                lastFetch: null
-            };
-        }
-
-        if (typeof performance !== 'undefined') {
-            performance.mark('scratch-vm-deserialize-start');
-        }
+        safePerformanceMark('scratch-vm-deserialize-start');
         const runtime = this.runtime;
         const deserializePromise = function () {
             const projectVersion = projectJSON.projectVersion;
@@ -954,20 +761,23 @@ class VirtualMachine extends EventEmitter {
         };
         return deserializePromise()
             .then(({targets, extensions}) => {
-                if (typeof performance !== 'undefined') {
-                    performance.mark('scratch-vm-deserialize-end');
-                    try {
-                        performance.measure('scratch-vm-deserialize',
-                            'scratch-vm-deserialize-start', 'scratch-vm-deserialize-end');
-                    } catch (e) {
-                        // performance.measure() will throw an error if the start deserialize
-                        // marker was removed from memory before we finished deserializing
-                        // the project. We've seen this happen a couple times when loading
-                        // very large projects.
-                        log.error(e);
-                    }
-                }
-                return this.installTargets(targets, extensions, true);
+                safePerformanceMark('scratch-vm-deserialize-end');
+                safePerformanceMeasure(
+                    'scratch-vm-deserialize',
+                    'scratch-vm-deserialize-start',
+                    'scratch-vm-deserialize-end'
+                );
+
+                safePerformanceMark('scratch-vm-installTargets-start');
+                return this.installTargets(targets, extensions, true).then(result => {
+                    safePerformanceMark('scratch-vm-installTargets-end');
+                    safePerformanceMeasure(
+                        'scratch-vm-installTargets',
+                        'scratch-vm-installTargets-start',
+                        'scratch-vm-installTargets-end'
+                    );
+                    return result;
+                });
             });
     }
 
@@ -990,8 +800,7 @@ class VirtualMachine extends EventEmitter {
                 if (!url) {
                     throw new Error(`Unknown extension: ${extensionID}`);
                 }
-                //if (await this.securityManager.canLoadExtensionFromProject(url)) {
-                if (true) {
+                if (await this.securityManager.canLoadExtensionFromProject(url)) {
                     extensionPromises.push(this.extensionManager.loadExtensionURL(url));
                 } else {
                     throw new Error(`Permission to load extension denied: ${extensionID}`);
@@ -1009,45 +818,89 @@ class VirtualMachine extends EventEmitter {
      * @returns {Promise} resolved once targets have been installed
      */
     async installTargets (targets, extensions, wholeProject) {
+        safePerformanceMark('scratch-vm-installTargets-waitAsyncExtensions-start');
         await this.extensionManager.allAsyncExtensionsLoaded();
+        safePerformanceMark('scratch-vm-installTargets-waitAsyncExtensions-end');
+        safePerformanceMeasure(
+            'scratch-vm-installTargets-waitAsyncExtensions',
+            'scratch-vm-installTargets-waitAsyncExtensions-start',
+            'scratch-vm-installTargets-waitAsyncExtensions-end'
+        );
 
         targets = targets.filter(target => !!target);
 
-        return this._loadExtensions(extensions.extensionIDs, extensions.extensionURLs).then(() => {
-            targets.forEach(target => {
-                this.runtime.addTarget(target);
-                (/** @type RenderedTarget */ target).updateAllDrawableProperties();
-                // Ensure unique sprite name
-                if (target.isSprite()) this.renameSprite(target.id, target.getName());
-            });
-            // Sort the executable targets by layerOrder.
-            // Remove layerOrder property after use.
-            this.runtime.executableTargets.sort((a, b) => a.layerOrder - b.layerOrder);
-            targets.forEach(target => {
-                delete target.layerOrder;
-            });
+        safePerformanceMark('scratch-vm-installTargets-loadExtensions-start');
+        await this._loadExtensions(extensions.extensionIDs, extensions.extensionURLs);
+        safePerformanceMark('scratch-vm-installTargets-loadExtensions-end');
+        safePerformanceMeasure(
+            'scratch-vm-installTargets-loadExtensions',
+            'scratch-vm-installTargets-loadExtensions-start',
+            'scratch-vm-installTargets-loadExtensions-end'
+        );
 
-            // Select the first target for editing, e.g., the first sprite.
-            if (wholeProject && (targets.length > 1)) {
-                this.editingTarget = targets[1];
-            } else {
-                this.editingTarget = targets[0];
+        safePerformanceMark('scratch-vm-installTargets-addTargets-start');
+        const seenSpriteNames = new Set(
+            this.runtime.targets
+                .filter(target => target && target.isSprite && target.isSprite())
+                .map(target => target.getName())
+                .filter(name => name)
+        );
+        targets.forEach(target => {
+            this.runtime.addTarget(target);
+            (/** @type RenderedTarget */ target).updateAllDrawableProperties();
+
+            // Ensure unique sprite name.
+            // renameSprite() is O(number of sprites) due to scanning runtime.targets.
+            // Most projects already have unique names, so only call it when needed.
+            if (target.isSprite()) {
+                const name = target.getName();
+                if (name && seenSpriteNames.has(name)) {
+                    this.renameSprite(target.id, name);
+                }
+                seenSpriteNames.add(target.getName());
             }
-
-            if (!wholeProject) {
-                this.editingTarget.fixUpVariableReferences();
-            }
-
-            if (wholeProject) {
-                this.runtime.parseProjectOptions();
-            }
-
-            // Update the VM user's knowledge of targets and blocks on the workspace.
-            this.emitTargetsUpdate(false /* Don't emit project change */);
-            this.emitWorkspaceUpdate();
-            this.runtime.setEditingTarget(this.editingTarget);
-            this.runtime.ioDevices.cloud.setStage(this.runtime.getTargetForStage());
         });
+        safePerformanceMark('scratch-vm-installTargets-addTargets-end');
+        safePerformanceMeasure(
+            'scratch-vm-installTargets-addTargets',
+            'scratch-vm-installTargets-addTargets-start',
+            'scratch-vm-installTargets-addTargets-end'
+        );
+
+        safePerformanceMark('scratch-vm-installTargets-finalize-start');
+        // Sort the executable targets by layerOrder.
+        // Remove layerOrder property after use.
+        this.runtime.executableTargets.sort((a, b) => a.layerOrder - b.layerOrder);
+        targets.forEach(target => {
+            delete target.layerOrder;
+        });
+
+        // Select the first target for editing, e.g., the first sprite.
+        if (wholeProject && (targets.length > 1)) {
+            this.editingTarget = targets[1];
+        } else {
+            this.editingTarget = targets[0];
+        }
+
+        if (!wholeProject) {
+            this.editingTarget.fixUpVariableReferences();
+        }
+
+        if (wholeProject) {
+            this.runtime.parseProjectOptions();
+        }
+
+        // Update the VM user's knowledge of targets and blocks on the workspace.
+        this.emitTargetsUpdate(false /* Don't emit project change */);
+        this.emitWorkspaceUpdate();
+        this.runtime.setEditingTarget(this.editingTarget);
+        this.runtime.ioDevices.cloud.setStage(this.runtime.getTargetForStage());
+        safePerformanceMark('scratch-vm-installTargets-finalize-end');
+        safePerformanceMeasure(
+            'scratch-vm-installTargets-finalize',
+            'scratch-vm-installTargets-finalize-start',
+            'scratch-vm-installTargets-finalize-end'
+        );
     }
 
     /**
@@ -1350,7 +1203,6 @@ class VirtualMachine extends EventEmitter {
      * @return {string} the costume's SVG string if it's SVG,
      *     a dataURI if it's a PNG or JPG, or null if it couldn't be found or decoded.
      */
-    
     getCostume (costumeIndex) {
         const asset = this.editingTarget.getCostumes()[costumeIndex].asset;
         if (!asset || !this.runtime || !this.runtime.storage) return null;
@@ -1364,7 +1216,6 @@ class VirtualMachine extends EventEmitter {
         log.error(`Unhandled format: ${asset.dataFormat}`);
         return null;
     }
-
 
     /**
      * TW: Get the raw binary data to use when exporting a costume to the user's local file system.
@@ -2058,14 +1909,27 @@ class VirtualMachine extends EventEmitter {
      * @param {object} data An object with sprite info data to set.
      */
     postSpriteInfo (data) {
-        if (this._dragTarget) {
-            this._dragTarget.postSpriteInfo(data);
-        } else {
-            this.editingTarget.postSpriteInfo(data);
-        }
+        const target = this._dragTarget || this.editingTarget;
+        target.postSpriteInfo(data);
         // Post sprite info means the gui has changed something about a sprite,
         // either through the sprite info pane fields (e.g. direction, size) or
         // through dragging a sprite on the stage
+        
+        // Filter to only sync-able properties
+        const validProps = ['x', 'y', 'direction', 'size', 'visible', 'rotationStyle'];
+        const changedProps = {};
+        console.log(data);
+        for (const prop of validProps) {
+            if (Object.prototype.hasOwnProperty.call(data, prop)) {
+                changedProps[prop] = data[prop];
+            }
+        }
+        
+        // Emit immediate event for collaboration sync if properties changed
+        if (Object.keys(changedProps).length > 0 && target) {
+            this.runtime.emit(Runtime.SPRITE_INFO_CHANGED, target, changedProps);
+        }
+        
         // Emit a project changed event.
         this.runtime.emitProjectChanged();
     }
@@ -2109,63 +1973,6 @@ class VirtualMachine extends EventEmitter {
             }
         }
         return null;
-    }
-
-    /**
-     * Get the compiled JavaScript source code for a block.
-     * @param {!string} blockId ID of the block to compile.
-     * @returns {?string} The JavaScript source code, or null if the block could not be compiled.
-     */
-    getBlockCompiledSource (blockId) {
-        // Find which target owns this block
-        let targetWithBlock = null;
-        for (const target of this.runtime.targets) {
-            if (target.blocks.getBlock(blockId)) {
-                targetWithBlock = target;
-                break;
-            }
-        }
-        
-        if (!targetWithBlock) {
-            // Also check flyout blocks
-            if (this.runtime.flyoutBlocks.getBlock(blockId)) {
-                // Flyout blocks are not executable, cannot compile
-                return null;
-            }
-            // Block not found
-            return null;
-        }
-        
-        try {
-            // Import compiler modules (dynamic import to avoid circular dependencies)
-            const Thread = require('./engine/thread');
-            const {IRGenerator} = require('./compiler/irgen');
-            const JSGenerator = require('./compiler/jsgen');
-            
-            // Create a thread for this block
-            const thread = new Thread(targetWithBlock.blocks, blockId);
-            thread.target = targetWithBlock;
-            thread.blockContainer = targetWithBlock.blocks;
-            thread.topBlock = blockId;
-            
-            // Generate intermediate representation
-            const irGenerator = new IRGenerator(thread);
-            const ir = irGenerator.generate();
-            
-            // Get the entry script
-            const entryScript = ir.entry;
-            
-            // Create JSGenerator to get source code
-            const jsGenerator = new JSGenerator(entryScript, ir, targetWithBlock);
-            
-            // Get the source code
-            const sourceCode = jsGenerator.getSourceCode();
-            
-            return sourceCode;
-        } catch (error) {
-            log.error('Failed to get compiled source for block', blockId, error);
-            return null;
-        }
     }
 
     /**

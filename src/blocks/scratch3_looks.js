@@ -306,7 +306,8 @@ class Scratch3LooksBlocks {
             looks_goforwardbackwardlayers: this.goForwardBackwardLayers,
             looks_size: this.getSize,
             looks_costumenumbername: this.getCostumeNumberName,
-            looks_backdropnumbername: this.getBackdropNumberName
+            looks_backdropnumbername: this.getBackdropNumberName,
+            looks_costumes: this.getCostumes
         };
     }
 
@@ -352,7 +353,11 @@ class Scratch3LooksBlocks {
     }
 
     think (args, util) {
-        this.runtime.emit(Scratch3LooksBlocks.SAY_OR_THINK, util.target, 'think', args.MESSAGE);
+        this._think(args.MESSAGE, util.target);
+    }
+    
+    _think (message, target) { // used by compiler
+        this.runtime.emit(Scratch3LooksBlocks.SAY_OR_THINK, target, 'think', message);
     }
 
     thinkforsecs (args, util) {
@@ -379,6 +384,10 @@ class Scratch3LooksBlocks {
     hide (args, util) {
         util.target.setVisible(false);
         this._renderBubble(util.target);
+    }
+
+    getCostumes (args, util) {
+        return JSON.stringify(util.target.sprite.costumes.map(costume => costume.name));
     }
 
     /**

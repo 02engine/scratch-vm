@@ -76,6 +76,7 @@ global.Scratch = global.Scratch || {};
 Object.assign(global.Scratch, ScratchCommon, {
     canFetch: () => Promise.resolve(true),
     fetch: (url, options) => fetch(url, options),
+    download: () => Promise.reject(new Error('Scratch.download not supported in sandboxed extensions')),
     canOpenWindow: () => Promise.resolve(false),
     openWindow: () => Promise.reject(new Error('Scratch.openWindow not supported in sandboxed extensions')),
     canRedirect: () => Promise.resolve(false),
@@ -87,7 +88,6 @@ Object.assign(global.Scratch, ScratchCommon, {
     canGeolocate: () => Promise.resolve(false),
     canEmbed: () => Promise.resolve(false),
     canDownload: () => Promise.resolve(false),
-    download: () => Promise.reject(new Error('Scratch.download not supported in sandboxed extensions')),
     translate
 });
 

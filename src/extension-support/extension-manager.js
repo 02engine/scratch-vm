@@ -29,6 +29,18 @@ const defaultBuiltinExtensions = {
     tw: () => require('../extensions/tw')
 };
 
+const coreExtensions = [
+    'motion',
+    'looks',
+    'sound',
+    'events',
+    'control',
+    'sensing',
+    'operators',
+    'data',
+    'procedures'
+];
+
 /**
  * @typedef {object} ArgumentInfo - Information about an extension block argument
  * @property {ArgumentType} type - the type of value this argument can take
@@ -126,6 +138,7 @@ class ExtensionManager {
         this.asyncExtensionsLoadedCallbacks = [];
 
         this.builtinExtensions = Object.assign({}, defaultBuiltinExtensions);
+        this.coreExtensions = coreExtensions;
 
         dispatch.setService('extensions', createExtensionService(this)).catch(e => {
             log.error(`ExtensionManager was unable to register extension service: ${JSON.stringify(e)}`);
@@ -151,6 +164,16 @@ class ExtensionManager {
      */
     isBuiltinExtension (extensionId) {
         return Object.prototype.hasOwnProperty.call(this.builtinExtensions, extensionId);
+    }
+
+    /**
+     * Determine whether an extension with a given ID is registered as a core extension in the VM, such as motion.
+     * Note that custom extensions or extensions that don't load on startup will return false here.
+     * @param {string} extensionId
+     * @returns {boolean}
+     */
+    isCoreExtension (extensionId) {
+        return this.coreExtensions.includes(extensionId);
     }
 
     /**
@@ -207,8 +230,8 @@ class ExtensionManager {
             return;
         }
 
-        if (this.isExtensionURLLoaded(extensionURL)) {
-            // Extension is already loaded.
+        if (this.isExtensionURLLoaded(extensionURL) || this.isCoreExtension(extensionURL)) {
+            // Extension is already loaded or is a core extension.
             return;
         }
 
@@ -220,10 +243,8 @@ class ExtensionManager {
 
         this.loadingAsyncExtensions++;
 
-        //const sandboxMode = await this.securityManager.getSandboxMode(extensionURL);
-        const sandboxMode='unsandboxed';
-        //const rewritten = await this.securityManager.rewriteExtensionURL(extensionURL);
-        const rewritten = extensionURL;
+        const sandboxMode = await this.securityManager.getSandboxMode(extensionURL);
+        const rewritten = await this.securityManager.rewriteExtensionURL(extensionURL);
 
         if (sandboxMode === 'unsandboxed') {
             const {load} = require('./tw-unsandboxed-extension-runner');
@@ -259,6 +280,52 @@ class ExtensionManager {
             this.pendingExtensions.push({extensionURL: rewritten, resolve, reject});
             dispatch.addWorker(new ExtensionWorker());
         }).catch(error => this._failedLoadingExtensionScript(error));
+    }
+
+    /**
+     * Reorder an extension by using current index and reorder to index
+     * @param {string} extensionIndex - the index of the extension to reorder
+     * @param {string} reorderIndex - the index to reorder the extension to
+     * @returns {Promise} resolved once the extension is loaded and initialized or rejected on failure
+     */
+    reorderExtension (extensionIndex, reorderIndex) {
+        const extensionIds = Array.from(this._loadedExtensions.keys());
+        if (extensionIndex < 0 || extensionIndex >= extensionIds.length) return Promise.resolve();
+        if (reorderIndex < 0 || reorderIndex >= extensionIds.length) return Promise.resolve();
+
+        const [moved] = extensionIds.splice(extensionIndex, 1);
+        extensionIds.splice(reorderIndex, 0, moved);
+
+        const nextLoadedExtensions = new Map();
+        for (const id of extensionIds) {
+            nextLoadedExtensions.set(id, this._loadedExtensions.get(id));
+        }
+        this._loadedExtensions = nextLoadedExtensions;
+
+        // Keep runtime block category ordering consistent with extension order.
+        return dispatch.call('runtime', '_setExtensionOrder', extensionIds);
+    }
+
+    /**
+     * Unload an extension by URL or internal extension ID
+     * @param {string} extensionURL - the URL for the extension to load OR the ID of an internal extension
+     * @returns {Promise} resolved once the extension is loaded and initialized or rejected on failure
+     */
+    removeExtension (extensionURL) {
+        if (!this.isExtensionLoaded(extensionURL)) {
+            const message = `Rejecting attempt to remove an unloaded extension with ID ${extensionURL}`;
+            log.warn(message);
+            return;
+        }
+        const serviceName = this._loadedExtensions.get(extensionURL);
+        delete dispatch.services[serviceName];
+        delete this.runtime[`ext_${extensionURL}`];
+        this._loadedExtensions.delete(extensionURL);
+        const workerId = +serviceName.split('.')[1];
+        delete this.workerURLs[workerId];
+
+        // Remove the extension category and primitives from runtime.
+        dispatch.call('runtime', '_unregisterExtensionPrimitives', extensionURL);
     }
 
     /**

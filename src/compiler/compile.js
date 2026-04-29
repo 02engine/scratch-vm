@@ -1,28 +1,33 @@
 // @ts-check
 
+// eslint-disable-next-line no-unused-vars
+const Thread = require('../engine/thread');
+// eslint-disable-next-line no-unused-vars
+const {IntermediateScript} = require('./intermediate');
 const {IRGenerator} = require('./irgen');
-const {IROptimizer} = require('./iroptimizer');
 const JSGenerator = require('./jsgen');
 
-const compileThread = (/** @type {import("../engine/thread")} */ thread, asSources) => {
+/**
+ * @param {Thread} thread
+ * @returns {Object}
+ */
+const compile = thread => {
     const irGenerator = new IRGenerator(thread);
     const ir = irGenerator.generate();
 
-    const irOptimizer = new IROptimizer(ir);
-    irOptimizer.optimize();
-
-    const procedures = {};
+    const procedures = Object.create(null);
     const target = thread.target;
 
-    const compileScript = (/** @type {import("./intermediate").IntermediateScript} */ script) => {
+    /**
+     * @param {IntermediateScript} script
+     */
+    const compileScript = script => {
         if (script.cachedCompileResult) {
             return script.cachedCompileResult;
         }
 
         const compiler = new JSGenerator(script, ir, target);
-        const result = asSources ? {
-            factorySource: compiler.getSourceCode()
-        } : compiler.compile();
+        const result = compiler.compile();
         script.cachedCompileResult = result;
         return result;
     };
@@ -41,9 +46,5 @@ const compileThread = (/** @type {import("../engine/thread")} */ thread, asSourc
         executableHat: ir.entry.executableHat
     };
 };
-
-const compile = thread => compileThread(thread, false);
-
-compile.asSources = thread => compileThread(thread, true);
 
 module.exports = compile;
