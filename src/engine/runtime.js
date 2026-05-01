@@ -2,6 +2,7 @@ const EventEmitter = require('events');
 const {OrderedMap} = require('immutable');
 const ExtendedJSON = require('@turbowarp/json');
 const uuid = require('uuid');
+const Buffer = require('buffer').Buffer;
 
 const ArgumentType = require('../extension-support/argument-type');
 const Blocks = require('./blocks');
@@ -54,6 +55,16 @@ const FrameLoop = require('./tw-frame-loop');
 const defaultExtensionColors = ['#0FBD8C', '#0DA57A', '#0B8E69'];
 
 const COMMENT_CONFIG_MAGIC = ' // _twconfig_';
+
+const decodeCompiledFactorySource = factoryData => {
+    if (!factoryData || typeof factoryData.factorySource !== 'string') {
+        return '';
+    }
+    if (factoryData.factoryEncoding === 'base64') {
+        return Buffer.from(factoryData.factorySource, 'base64').toString('utf8');
+    }
+    return factoryData.factorySource;
+};
 
 /**
  * Information used for converting Scratch argument types into scratch-blocks data.
@@ -539,6 +550,138 @@ class Runtime extends EventEmitter {
         this.finishedAssetRequests = 0;
     }
 
+    clearCompiledProjectData () {
+        this._compiledTargetScripts.clear();
+        this._compiledHats.clear();
+        for (const target of this.targets) {
+            delete target.compiledScripts;
+            delete target.compiledProcedures;
+        }
+    }
+
+    installCompiledProjectData (compiledProjectData) {
+        this.clearCompiledProjectData();
+        if (!compiledProjectData || !compiledProjectData.compiledTargets) {
+            return;
+        }
+
+        const originalTargets = this.targets.filter(target => target.isOriginal);
+
+        for (const [targetKey, targetData] of Object.entries(compiledProjectData.compiledTargets)) {
+            let target = this.getTargetById(targetKey);
+            if (!target) {
+                const targetIndex = Number.isInteger(targetData && targetData.targetIndex) ?
+                    targetData.targetIndex :
+                    Number.parseInt(targetKey, 10);
+                if (Number.isInteger(targetIndex) && targetIndex >= 0 && targetIndex < originalTargets.length) {
+                    target = originalTargets[targetIndex];
+                }
+            }
+            if (!target && targetData && typeof targetData.name === 'string') {
+                target = originalTargets.find(candidate =>
+                    candidate && candidate.isStage === !!targetData.isStage && candidate.getName() === targetData.name
+                );
+            }
+            if (!target) {
+                continue;
+            }
+
+            const scripts = Object.create(null);
+            const procedures = Object.create(null);
+
+            for (const [procedureVariant, procedureData] of Object.entries(targetData.procedures || {})) {
+                procedures[procedureVariant] = compilerExecute.scopedEval(decodeCompiledFactorySource(procedureData));
+            }
+
+            for (const [topBlockId, scriptData] of Object.entries(targetData.scripts || {})) {
+                scripts[topBlockId] = {
+                    startingFunction: compilerExecute.scopedEval(decodeCompiledFactorySource(scriptData)),
+                    executableHat: !!scriptData.executableHat
+                };
+            }
+
+            target.compiledScripts = scripts;
+            target.compiledProcedures = procedures;
+            this._compiledTargetScripts.set(target.id, {
+                scripts,
+                procedures
+            });
+
+            for (const hatData of (targetData.hats || [])) {
+                const compiledHat = {
+                    targetId: target.id,
+                    topBlockId: hatData.topBlockId,
+                    fieldsOfInputs: hatData.fieldsOfInputs || {}
+                };
+                if (!this._compiledHats.has(hatData.opcode)) {
+                    this._compiledHats.set(hatData.opcode, []);
+                }
+                this._compiledHats.get(hatData.opcode).push(compiledHat);
+            }
+        }
+    }
+
+    getCompiledScript (target, topBlockId) {
+        if (!target) {
+            return null;
+        }
+        const targetData = this._compiledTargetScripts.get(target.id);
+        if (!targetData) {
+            return null;
+        }
+        const script = targetData.scripts[topBlockId];
+        if (!script) {
+            return null;
+        }
+        return {
+            script,
+            procedures: targetData.procedures
+        };
+    }
+
+    inheritCompiledProjectData (newTarget, sourceTarget) {
+        if (!newTarget || !sourceTarget) {
+            return;
+        }
+        const sourceCompiledData = this._compiledTargetScripts.get(sourceTarget.id);
+        if (!sourceCompiledData) {
+            return;
+        }
+
+        newTarget.compiledScripts = sourceCompiledData.scripts;
+        newTarget.compiledProcedures = sourceCompiledData.procedures;
+        this._compiledTargetScripts.set(newTarget.id, sourceCompiledData);
+
+        for (const [opcode, scripts] of this._compiledHats.entries()) {
+            const inheritedScripts = scripts
+                .filter(script => script.targetId === sourceTarget.id)
+                .map(script => ({
+                    targetId: newTarget.id,
+                    topBlockId: script.topBlockId,
+                    fieldsOfInputs: script.fieldsOfInputs
+                }));
+            if (inheritedScripts.length > 0) {
+                scripts.push(...inheritedScripts);
+            }
+        }
+    }
+
+    removeCompiledProjectDataForTarget (target) {
+        if (!target) {
+            return;
+        }
+        this._compiledTargetScripts.delete(target.id);
+        delete target.compiledScripts;
+        delete target.compiledProcedures;
+        for (const [opcode, scripts] of this._compiledHats.entries()) {
+            const filteredScripts = scripts.filter(script => script.targetId !== target.id);
+            if (filteredScripts.length === 0) {
+                this._compiledHats.delete(opcode);
+            } else if (filteredScripts.length !== scripts.length) {
+                this._compiledHats.set(opcode, filteredScripts);
+            }
+        }
+    }
     /**
      * Width of the stage, in pixels.
      * @const {number}
