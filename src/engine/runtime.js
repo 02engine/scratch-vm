@@ -2870,6 +2870,25 @@ class Runtime extends EventEmitter {
     }
 
     /**
+     * tw: Change runtime ops per frame.
+     * @param {number} opsPerFrame Target ops per frame.
+     */
+    setOpsPerFrame (opsPerFrame) {
+        if (!isFinite(opsPerFrame) || opsPerFrame <= 0) {
+            opsPerFrame = 1;
+        }
+        this.frameLoop.setOpsPerFrame(opsPerFrame);
+    }
+
+    /**
+     * tw: Get runtime ops per frame.
+     * @returns {number} Current ops per frame.
+     */
+    getOpsPerFrame () {
+        return this.frameLoop.opsPerFrame;
+    }
+
+    /**
      * tw: Enable or disable interpolation.
      * @param {boolean} interpolationEnabled True if interpolation should be enabled.
      */
