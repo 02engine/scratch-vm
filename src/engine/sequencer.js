@@ -82,7 +82,6 @@ class Sequencer {
         // Whether `stepThreads` has run through a full single tick.
         let ranFirstTick = false;
         const doneThreads = [];
-
         // tw: If this happens, the runtime is in initialization, do not execute any thread.
         if (this.runtime.currentStepTime === 0) return [];
         // Conditions for continuing to stepping threads:
@@ -91,6 +90,7 @@ class Sequencer {
         // 3. Either turbo mode, or no redraw has been requested by a primitive.
         while (this.runtime.threads.length > 0 &&
                numActiveThreads > 0 &&
+               //this.timer.timeElapsed() < WORK_TIME &&
                (this.runtime.turboMode || !this.runtime.redrawRequested)) {
             if (this.runtime.profiler !== null) {
                 if (stepThreadsInnerProfilerId === -1) {
@@ -166,7 +166,6 @@ class Sequencer {
                 }
                 this.runtime.threads.length = nextActiveThread;
             }
-
             // tw: Detect timer here so the sequencer won't break when FPS is greater than 1000
             // and performance.now() is not available.
             if (this.timer.timeElapsed() >= WORK_TIME) break;
@@ -200,6 +199,7 @@ class Sequencer {
         }
         // Save the current block ID to notice if we did control flow.
         while ((currentBlockId = thread.peekStack())) {
+            const initialStackSize = thread.stack.length;
             let isWarpMode = thread.peekStackFrame().warpMode;
             if (isWarpMode && !thread.warpTimer) {
                 // Initialize warp-mode timer if it hasn't been already.
@@ -245,7 +245,11 @@ class Sequencer {
                 return;
             }
             // If no control flow has happened, switch to next block.
-            if (thread.peekStack() === currentBlockId && !thread.peekStackFrame().waitingReporter) {
+            if (
+                thread.stack.length === initialStackSize &&
+                thread.peekStack() === currentBlockId &&
+                !thread.peekStackFrame().waitingReporter
+            ) {
                 thread.goToNextBlock();
             }
             // If no next block has been found at this point, look on the stack.

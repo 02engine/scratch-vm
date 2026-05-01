@@ -81,7 +81,7 @@ const deserializeCostume = function (costume, runtime, zip, assetFileName, textL
         `${assetId}.${costume.dataFormat}`;
 
     if (!storage) {
-        log.warn('No storage module present; cannot load costume asset: ', fileName);
+        //log.warn('No storage module present; cannot load costume asset: ', fileName);
         return Promise.resolve(null);
     }
 

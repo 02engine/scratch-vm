@@ -2,7 +2,6 @@ const EventEmitter = require('events');
 const {OrderedMap} = require('immutable');
 const ExtendedJSON = require('@turbowarp/json');
 const uuid = require('uuid');
-const Buffer = require('buffer').Buffer;
 
 const ArgumentType = require('../extension-support/argument-type');
 const Blocks = require('./blocks');
@@ -55,16 +54,6 @@ const FrameLoop = require('./tw-frame-loop');
 const defaultExtensionColors = ['#0FBD8C', '#0DA57A', '#0B8E69'];
 
 const COMMENT_CONFIG_MAGIC = ' // _twconfig_';
-
-const decodeCompiledFactorySource = factoryData => {
-    if (!factoryData || typeof factoryData.factorySource !== 'string') {
-        return '';
-    }
-    if (factoryData.factoryEncoding === 'base64') {
-        return Buffer.from(factoryData.factorySource, 'base64').toString('utf8');
-    }
-    return factoryData.factorySource;
-};
 
 /**
  * Information used for converting Scratch argument types into scratch-blocks data.
@@ -205,6 +194,12 @@ let stepProfilerId = -1;
 let stepThreadsProfilerId = -1;
 
 /**
+ * Numeric ID for RenderWebGL.draw in Profiler instances.
+ * @type {number}
+ */
+let rendererDrawProfilerId = -1;
+
+/**
  * Manages targets, scripts, and the sequencer.
  * @constructor
  */
@@ -232,6 +227,18 @@ class Runtime extends EventEmitter {
         this.threads = [];
 
         this.threadMap = new Map();
+
+        /**
+         * Precompiled script bundles keyed by runtime target id.
+         * @type {Map<string, {scripts: Object.<string, {startingFunction: Function, executableHat: boolean}>, procedures: Object.<string, Function>}>}
+         */
+        this._compiledTargetScripts = new Map();
+
+        /**
+         * Precompiled hat manifest keyed by opcode.
+         * @type {Map<string, Array<{targetId: string, topBlockId: string, fieldsOfInputs: object}>>}
+         */
+        this._compiledHats = new Map();
 
         /** @type {!Sequencer} */
         this.sequencer = new Sequencer(this);
@@ -445,12 +452,16 @@ class Runtime extends EventEmitter {
          */
         this.origin = null;
 
+        // 记录坐标网格的 skinId 和 drawableId
+        this._coordinateSkinId = null;
+        this._coordinateDrawableId = null;
+
         /**
          * Metadata about the platform this VM is part of.
          */
         this.platform = Object.assign({}, platform);
 
-        /**
+         /**
          * Screen refresh time speculated from screen refresh rate, in milliseconds.
          * Indicates time passed between two screen refreshments.
          * Based on site isolation status, the resolution could be ~0.1ms or lower.
@@ -473,8 +484,7 @@ class Runtime extends EventEmitter {
             maxClones: Runtime.MAX_CLONES,
             miscLimits: true,
             fencing: true,
-            caseSensitiveLists: false,
-            unsafeOptimisations: false
+            offscreenDrawableCulling: false
         };
 
         this.compilerOptions = {
@@ -484,6 +494,7 @@ class Runtime extends EventEmitter {
 
         this.debug = false;
 
+        this._lastStepTime = Date.now();
         this.interpolationEnabled = false;
 
         this._defaultStoredSettings = this._generateAllProjectOptions();
@@ -590,12 +601,12 @@ class Runtime extends EventEmitter {
             const procedures = Object.create(null);
 
             for (const [procedureVariant, procedureData] of Object.entries(targetData.procedures || {})) {
-                procedures[procedureVariant] = compilerExecute.scopedEval(decodeCompiledFactorySource(procedureData));
+                procedures[procedureVariant] = compilerExecute.scopedEval(procedureData.factorySource);
             }
 
             for (const [topBlockId, scriptData] of Object.entries(targetData.scripts || {})) {
                 scripts[topBlockId] = {
-                    startingFunction: compilerExecute.scopedEval(decodeCompiledFactorySource(scriptData)),
+                    startingFunction: compilerExecute.scopedEval(scriptData.factorySource),
                     executableHat: !!scriptData.executableHat
                 };
             }
@@ -682,6 +693,7 @@ class Runtime extends EventEmitter {
             }
         }
     }
+
     /**
      * Width of the stage, in pixels.
      * @const {number}
@@ -779,6 +791,10 @@ class Runtime extends EventEmitter {
      */
     static get FRAMERATE_CHANGED () {
         return 'FRAMERATE_CHANGED';
+    }
+
+    static get OPSPERFRAME_CHANGED () {
+        return 'OPSPERFRAME_CHANGED';
     }
 
     /**
@@ -913,7 +929,7 @@ class Runtime extends EventEmitter {
     }
 
     /**
-     * Event name for sprite info changed (from sprite data panel).
+     * Event name for sprite info changed (from sprite info panel or dragging).
      * @const {string}
      */
     static get SPRITE_INFO_CHANGED () {
@@ -950,22 +966,6 @@ class Runtime extends EventEmitter {
      */
     static get EXTENSION_ADDED () {
         return 'EXTENSION_ADDED';
-    }
-
-    /**
-     * Event name for reporting that an extension was removed.
-     * @const {string}
-     */
-    static get EXTENSION_REMOVED () {
-        return 'EXTENSION_REMOVED';
-    }
-
-    /**
-     * Event name for reporting that extensions were reordered.
-     * @const {string}
-     */
-    static get EXTENSIONS_REORDERED () {
-        return 'EXTENSIONS_REORDERED';
     }
 
     /**
@@ -1276,57 +1276,54 @@ class Runtime extends EventEmitter {
     }
 
     /**
-     * Unregister an extension's primitives and remove its category from blocks info.
+     * Remove an extension's category and registered primitives from runtime block info.
      * @param {string} extensionId - the extension ID
      * @private
      */
     _unregisterExtensionPrimitives (extensionId) {
-        // Remove category from block info
-        const index = this._blockInfo.findIndex(info => info.id === extensionId);
-        if (index !== -1) {
-            this._blockInfo.splice(index, 1);
+        const categoryIndex = this._blockInfo.findIndex(info => info.id === extensionId);
+        if (categoryIndex !== -1) {
+            this._blockInfo.splice(categoryIndex, 1);
         }
 
         const opcodePrefix = `${extensionId}_`;
-        const deleteByPrefix = obj => {
-            for (const key of Object.keys(obj)) {
+        const removeByPrefix = object => {
+            for (const key of Object.keys(object)) {
                 if (key.startsWith(opcodePrefix)) {
-                    delete obj[key];
+                    delete object[key];
                 }
             }
         };
-        deleteByPrefix(this._primitives);
-        deleteByPrefix(this._hats);
-        deleteByPrefix(this._flowing);
 
-        this.emit(Runtime.EXTENSION_REMOVED, {id: extensionId});
+        removeByPrefix(this._primitives);
+        removeByPrefix(this._hats);
+        removeByPrefix(this._flowing);
     }
 
     /**
-     * Reorder extension categories within runtime blocks info.
-     * @param {Array<string>} extensionIds - desired extension order
+     * Reorder extension categories inside runtime block info.
+     * @param {Array<string>} extensionIds Ordered extension IDs
      * @private
      */
     _setExtensionOrder (extensionIds) {
-        const idSet = new Set(extensionIds);
-        const removed = new Map();
-        const nextBlockInfo = [];
+        const targetIds = new Set(extensionIds);
+        const reordered = [];
+        const preserved = [];
+
         for (const info of this._blockInfo) {
-            if (info && idSet.has(info.id)) {
-                removed.set(info.id, info);
+            if (info && targetIds.has(info.id)) {
+                reordered.push(info);
             } else {
-                nextBlockInfo.push(info);
+                preserved.push(info);
             }
         }
 
-        for (const id of extensionIds) {
-            if (removed.has(id)) {
-                nextBlockInfo.push(removed.get(id));
-            }
-        }
-
-        this._blockInfo = nextBlockInfo;
-        this.emit(Runtime.EXTENSIONS_REORDERED, {ids: extensionIds});
+        const infoById = new Map(reordered.map(info => [info.id, info]));
+        this._blockInfo = preserved.concat(
+            extensionIds
+                .map(id => infoById.get(id))
+                .filter(Boolean)
+        );
     }
 
     /**
@@ -1560,24 +1557,15 @@ class Runtime extends EventEmitter {
     _convertBlockForScratchBlocks (blockInfo, categoryInfo) {
         const extendedOpcode = `${categoryInfo.id}_${blockInfo.opcode}`;
 
-        if (!blockInfo.color1) blockInfo.color1 = categoryInfo.color1;
-        if (!blockInfo.color2) blockInfo.color2 = categoryInfo.color2;
-        if (!blockInfo.color3) blockInfo.color3 = categoryInfo.color3;
-
         const blockJSON = {
             type: extendedOpcode,
             inputsInline: true,
             category: categoryInfo.name,
             extensions: [],
-            colour: blockInfo.color1,
-            colourSecondary: blockInfo.color2,
-            colourTertiary: blockInfo.color3
+            colour: blockInfo.color1 ?? categoryInfo.color1,
+            colourSecondary: blockInfo.color2 ?? categoryInfo.color2,
+            colourTertiary: blockInfo.color3 ?? categoryInfo.color3
         };
-
-        if (blockInfo.code) {
-            blockJSON.code = blockInfo.code;
-        }
-
         const context = {
             // TODO: store this somewhere so that we can map args appropriately after translation.
             // This maps an arg name to its relative position in the original (usually English) block text.
@@ -1666,7 +1654,7 @@ class Runtime extends EventEmitter {
         if (blockInfo.blockShape) {
             blockJSON.outputShape = blockInfo.blockShape;
         }
-        
+
         const blockText = Array.isArray(blockInfo.text) ? blockInfo.text : [blockInfo.text];
         let inTextNum = 0; // text for the next block "arm" is blockText[inTextNum]
         let inBranchNum = 0; // how many branches have we placed into the JSON so far?
@@ -1710,14 +1698,11 @@ class Runtime extends EventEmitter {
             )
         ) {
             // Add icon to the bottom right of a loop block
-
-            if (!blockInfo.branchIconURI) blockInfo.branchIconURI = 'media://repeat.svg';
-
             blockJSON[`lastDummyAlign${outLineNum}`] = 'RIGHT';
             blockJSON[`message${outLineNum}`] = '%1';
             blockJSON[`args${outLineNum}`] = [{
                 type: 'field_image',
-                src: blockInfo.branchIconURI,
+                src: blockInfo.branchIconURI ?? 'media://repeat.svg',
                 width: 24,
                 height: 24,
                 alt: '*', // TODO remove this since we don't use collapsed blocks in scratch
@@ -2169,6 +2154,41 @@ class Runtime extends EventEmitter {
         this.audioEngine = audioEngine;
     }
 
+        /**
+     * 创建坐标网格，并记录其 skinId 和 drawableId
+     */
+     _createCoordinate () {
+        this._coordinateSkinId = this.renderer.createCoordinateSkin();
+        this._coordinateDrawableId = this.renderer.createDrawable(StageLayering.BACKGROUND_LAYER);
+        this.renderer.updateDrawableSkinId(this._coordinateDrawableId, this._coordinateSkinId);
+    }
+
+    _setCoordinateVisible (visible) {
+        this.renderer.setCoordinateVisible(this._coordinateDrawableId, visible);
+    }
+
+    /**
+     * 修改坐标网格的显示或隐藏
+     */
+    triggerCoordinate (visible = false) {
+        if (!this.renderer) {
+            return;
+        }
+
+        if (this._coordinateSkinId === null) {
+            this._createCoordinate();
+        } else {
+            this._setCoordinateVisible(visible);
+        }
+    }
+
+    /**
+     * 修改坐标网格的字体大小
+     */
+    setCoordinateFontSize (fontSize) {
+        this.renderer.updateCoordinateSkinFontSize(this._coordinateSkinId, fontSize);
+    }
+
     /**
      * Attach the renderer
      * @param {!RenderWebGL} renderer The renderer to attach
@@ -2177,6 +2197,9 @@ class Runtime extends EventEmitter {
         this.renderer = renderer;
         this.renderer.setLayerGroupOrdering(StageLayering.LAYER_GROUPS);
         this.renderer.offscreenTouching = !this.runtimeOptions.fencing;
+        if (this.renderer.setOffscreenDrawableCulling) {
+            this.renderer.setOffscreenDrawableCulling(this.runtimeOptions.offscreenDrawableCulling);
+        }
         this.updatePrivacy();
     }
 
@@ -2250,7 +2273,8 @@ class Runtime extends EventEmitter {
         }
 
         // tw: compile new threads. Do not attempt to compile monitor threads.
-        if (!(opts && opts.updateMonitor) && this.compilerOptions.enabled) {
+        if (!(opts && opts.updateMonitor) &&
+            (this.compilerOptions.enabled || this.getCompiledScript(target, id))) {
             thread.tryCompile();
         }
 
@@ -2283,7 +2307,8 @@ class Runtime extends EventEmitter {
         newThread.blockContainer = thread.blockContainer;
         newThread.pushStack(thread.topBlock);
         // tw: when a thread is restarted, we have to check whether the previous script was attempted to be compiled.
-        if (thread.triedToCompile && this.compilerOptions.enabled) {
+        if (thread.triedToCompile &&
+            (this.compilerOptions.enabled || this.getCompiledScript(newThread.target, newThread.topBlock))) {
             newThread.tryCompile();
         }
         if (!newThread.stackClick && !newThread.updateMonitor) {
@@ -2409,9 +2434,25 @@ class Runtime extends EventEmitter {
         }
         for (let t = targets.length - 1; t >= 0; t--) {
             const target = targets[t];
-            const scripts = BlocksRuntimeCache.getScripts(target.blocks, opcode);
-            for (let j = 0; j < scripts.length; j++) {
-                f(scripts[j], target);
+            if (!this._compiledTargetScripts.has(target.id)) {
+                const scripts = BlocksRuntimeCache.getScripts(target.blocks, opcode);
+                for (let j = 0; j < scripts.length; j++) {
+                    f(scripts[j], target);
+                }
+            }
+            const compiledScripts = this._compiledHats.get(opcode);
+            if (!compiledScripts) {
+                continue;
+            }
+            for (let j = 0; j < compiledScripts.length; j++) {
+                const script = compiledScripts[j];
+                if (script.targetId !== target.id) {
+                    continue;
+                }
+                f({
+                    blockId: script.topBlockId,
+                    fieldsOfInputs: script.fieldsOfInputs
+                }, target);
             }
         }
     }
@@ -2512,6 +2553,7 @@ class Runtime extends EventEmitter {
      */
     dispose () {
         this.stopAll();
+        this.clearCompiledProjectData();
         // Deleting each target's variable's monitors.
         this.targets.forEach(target => {
             if (target.isOriginal) target.deleteMonitors();
@@ -2717,6 +2759,8 @@ class Runtime extends EventEmitter {
     }
 
     _renderInterpolatedPositions () {
+        //const frameStarted = this._lastStepTime;
+        //const now = Date.now();
         const frameStarted = this.frameLoop._lastStepTime;
         const now = this.frameLoop.now();
         const timeSinceStart = now - frameStarted;
@@ -2789,6 +2833,24 @@ class Runtime extends EventEmitter {
         // Store threads that completed this iteration for testing and other
         // internal purposes.
         this._lastStepDoneThreads = doneThreads;
+        /*if (this.renderer) {
+            // @todo: Only render when this.redrawRequested or clones rendered.
+            if (this.profiler !== null) {
+                if (rendererDrawProfilerId === -1) {
+                    rendererDrawProfilerId = this.profiler.idByName('RenderWebGL.draw');
+                }
+                this.profiler.start(rendererDrawProfilerId);
+            }
+            // tw: do not draw if document is hidden or a rAF loop is running
+            // Checking for the animation frame loop is more reliable than using
+            // interpolationEnabled in some edge cases
+            if (!document.hidden && !this.frameLoop._interpolationAnimation) {
+                this.renderer.draw();
+            }
+            if (this.profiler !== null) {
+                this.profiler.stop();
+            }
+        }*/
 
         if (this._refreshTargets) {
             this.emit(Runtime.TARGETS_UPDATE, false /* Don't emit project changed */);
@@ -2804,6 +2866,10 @@ class Runtime extends EventEmitter {
             this.profiler.stop();
             this.profiler.reportFrames();
         }
+
+        /*if (this.interpolationEnabled) {
+            this._lastStepTime = Date.now();
+        }*/
     }
 
     /**
@@ -2862,6 +2928,9 @@ class Runtime extends EventEmitter {
      * @param {number} framerate Target frames per second
      */
     setFramerate (framerate) {
+        // Setting framerate to anything greater than this is unnecessary and can break the sequencer
+        // Additionally, the JS spec says intervals can't run more than once every 4ms (250/s) anyways
+        //if (framerate > 250) framerate = 250;
         // Convert negative framerates to 1FPS
         // Note that 0 is a special value which means "matching device screen refresh rate"
         if (framerate < 0) framerate = 1;
@@ -2869,21 +2938,11 @@ class Runtime extends EventEmitter {
         this.emit(Runtime.FRAMERATE_CHANGED, framerate);
     }
 
-    /**
-     * tw: Change runtime ops per frame.
-     * @param {number} opsPerFrame Target ops per frame.
-     */
     setOpsPerFrame (opsPerFrame) {
-        if (!isFinite(opsPerFrame) || opsPerFrame <= 0) {
-            opsPerFrame = 1;
-        }
+        if (opsPerFrame < 0) opsPerFrame = 1;
         this.frameLoop.setOpsPerFrame(opsPerFrame);
+        this.emit(Runtime.OPSPERFRAME_CHANGED, opsPerFrame);
     }
-
-    /**
-     * tw: Get runtime ops per frame.
-     * @returns {number} Current ops per frame.
-     */
     getOpsPerFrame () {
         return this.frameLoop.opsPerFrame;
     }
@@ -2907,6 +2966,9 @@ class Runtime extends EventEmitter {
         this.emit(Runtime.RUNTIME_OPTIONS_CHANGED, this.runtimeOptions);
         if (this.renderer) {
             this.renderer.offscreenTouching = !this.runtimeOptions.fencing;
+            if (this.renderer.setOffscreenDrawableCulling) {
+                this.renderer.setOffscreenDrawableCulling(this.runtimeOptions.offscreenDrawableCulling);
+            }
         }
     }
 
@@ -3067,7 +3129,6 @@ class Runtime extends EventEmitter {
     }
 
     parseProjectOptions () {
-        this._storedProjectOptions = null;
         const comment = this.findProjectOptionsComment();
         if (!comment) return;
         const lineWithMagic = comment.text.split('\n').find(i => i.endsWith(COMMENT_CONFIG_MAGIC));
@@ -3088,10 +3149,11 @@ class Runtime extends EventEmitter {
             return;
         }
 
-        this._storedProjectOptions = parsed;
-
         if (typeof parsed.framerate === 'number') {
             this.setFramerate(parsed.framerate);
+        }
+        if (typeof parsed.opsPerFrame === 'number') {
+            this.setOpsPerFrame(parsed.opsPerFrame);
         }
         if (parsed.turbo) {
             this.turboMode = true;
@@ -3113,13 +3175,10 @@ class Runtime extends EventEmitter {
         }
     }
 
-    getStoredProjectOptions () {
-        return this._storedProjectOptions;
-    }
-
     _generateAllProjectOptions () {
         return {
             framerate: this.frameLoop.framerate,
+            opsPerFrame: this.frameLoop.opsPerFrame,
             runtimeOptions: this.runtimeOptions,
             interpolation: this.interpolationEnabled,
             turbo: this.turboMode,
@@ -3149,14 +3208,8 @@ class Runtime extends EventEmitter {
         return difference(this._defaultStoredSettings, this._generateAllProjectOptions());
     }
 
-    storeProjectOptions (extraOptions = null) {
+    storeProjectOptions () {
         const options = this.generateDifferingProjectOptions();
-
-        if (extraOptions && typeof extraOptions === 'object') {
-            if (Object.prototype.hasOwnProperty.call(extraOptions, 'mistwarpTheme')) {
-                options.mistwarpTheme = extraOptions.mistwarpTheme;
-            }
-        }
         // TODO: translate
         const text = `Configuration for https://turbowarp.org/\nYou can move, resize, and minimize this comment, but don't edit it by hand. This comment can be deleted to remove the stored settings.\n${ExtendedJSON.stringify(options)}${COMMENT_CONFIG_MAGIC}`;
         const existingComment = this.findProjectOptionsComment();
@@ -3188,11 +3241,6 @@ class Runtime extends EventEmitter {
     enableDebug () {
         this.resetAllCaches();
         this.debug = true;
-    }
-
-    disableDebug () {
-        this.resetAllCaches();
-        this.debug = false;
     }
 
     /**
@@ -3326,20 +3374,14 @@ class Runtime extends EventEmitter {
 
     /**
      * Emit value for reporter to show in the blocks.
+     * @param {Target} target The target that the block was run in.
      * @param {string} blockId ID for the block.
      * @param {string} value Value to show associated with the block.
      */
-    visualReport (blockId, value) {
-        if (typeof value === 'object') {
-            value = JSON.stringify(value);
+    visualReport (target, blockId, value) {
+        if (target === this.getEditingTarget()) {
+            this.emit(Runtime.VISUAL_REPORT, {id: blockId, value: String(value)});
         }
-        if (typeof value === 'undefined') {
-            value = 'undefined';
-        }
-        if (value.length > 10000) {
-            value = `${value.substr(0, 10000)}...`;
-        }
-        this.emit(Runtime.VISUAL_REPORT, {id: blockId, value: value});
     }
 
     /**
@@ -3502,6 +3544,9 @@ class Runtime extends EventEmitter {
      * @fires Runtime#targetWasCreated
      */
     fireTargetWasCreated (newTarget, sourceTarget) {
+        if (sourceTarget) {
+            this.inheritCompiledProjectData(newTarget, sourceTarget);
+        }
         this.emit('targetWasCreated', newTarget, sourceTarget);
     }
 
@@ -3511,6 +3556,7 @@ class Runtime extends EventEmitter {
      * @fires Runtime#targetWasRemoved
      */
     fireTargetWasRemoved (target) {
+        this.removeCompiledProjectDataForTarget(target);
         this.emit('targetWasRemoved', target);
     }
 

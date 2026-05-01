@@ -63,27 +63,6 @@ class Scratch3PenBlocks {
          */
         this._penSkinId = -1;
 
-        /**
-         * Canvas for bitmap operations like text rendering.
-         * @type {HTMLCanvasElement}
-         * @private
-         */
-        this.bitmapCanvas = document.createElement('canvas');
-
-        /**
-         * The ID of the bitmap skin for canvas operations.
-         * @type {int}
-         * @private
-         */
-        this.bitmapSkinID = -1;
-
-        /**
-         * The ID of the bitmap drawable for canvas operations.
-         * @type {int}
-         * @private
-         */
-        this.bitmapDrawableID = -1;
-
         this._onTargetCreated = this._onTargetCreated.bind(this);
         this._onTargetMoved = this._onTargetMoved.bind(this);
 
@@ -106,15 +85,6 @@ class Scratch3PenBlocks {
             penAttributes: {
                 color4f: [0, 0, 1, 1],
                 diameter: 1
-            },
-            printTextAttribute: {
-                font: 'Arial',
-                size: 16,
-                color: '#000000',
-                strokeColor: '#000000',
-                strokeWidth: 0,
-                weight: 'normal',
-                italic: false
             }
         };
     }
@@ -167,10 +137,14 @@ class Scratch3PenBlocks {
      * @private
      */
     _getPenLayerID () {
-        if (this._penSkinId < 0 && this.runtime.renderer) {
-            this._penSkinId = this.runtime.renderer.createPenSkin();
-            this._penDrawableId = this.runtime.renderer.createDrawable(StageLayering.PEN_LAYER);
-            this.runtime.renderer.updateDrawableSkinId(this._penDrawableId, this._penSkinId);
+        const renderer = this.runtime.renderer;
+        if (this._penSkinId < 0 && renderer) {
+            this._penSkinId = renderer.createPenSkin();
+            this._penDrawableId = renderer.createDrawable(StageLayering.PEN_LAYER);
+            if (renderer.markDrawableAsNoninteractive) {
+                renderer.markDrawableAsNoninteractive(this._penDrawableId);
+            }
+            renderer.updateDrawableSkinId(this._penDrawableId, this._penSkinId);
         }
         return this._penSkinId;
     }
@@ -466,179 +440,6 @@ class Scratch3PenBlocks {
                     },
                     filter: [TargetType.SPRITE]
                 },
-                '---',
-                {
-                    opcode: 'drawTriangle',
-                    blockType: BlockType.COMMAND,
-                    text: formatMessage({
-                        id: 'pen.triangle',
-                        default: 'draw triangle between [X0] [Y0], [X1] [Y1] and [X2] [Y2]',
-                        description: 'draw a triangle'
-                    }),
-                    arguments: {
-                        X0: {
-                            type: ArgumentType.NUMBER,
-                            defaultValue: 0
-                        },
-                        Y0: {
-                            type: ArgumentType.NUMBER,
-                            defaultValue: 0
-                        },
-                        X1: {
-                            type: ArgumentType.NUMBER,
-                            defaultValue: 0
-                        },
-                        Y1: {
-                            type: ArgumentType.NUMBER,
-                            defaultValue: 0
-                        },
-                        X2: {
-                            type: ArgumentType.NUMBER,
-                            defaultValue: 0
-                        },
-                        Y2: {
-                            type: ArgumentType.NUMBER,
-                            defaultValue: 0
-                        }
-                    },
-                    filter: [TargetType.SPRITE]
-                },
-                {
-                    opcode: 'setPrintFont',
-                    blockType: BlockType.COMMAND,
-                    text: formatMessage({
-                        id: 'pen.setPrintFont',
-                        default: 'set print font to [FONT]',
-                        description: 'set the font for text printing'
-                    }),
-                    arguments: {
-                        FONT: {
-                            type: ArgumentType.STRING,
-                            defaultValue: 'Arial'
-                        }
-                    },
-                    filter: [TargetType.SPRITE]
-                },
-                {
-                    opcode: 'setPrintFontSize',
-                    blockType: BlockType.COMMAND,
-                    text: formatMessage({
-                        id: 'pen.setPrintFontSize',
-                        default: 'set print font size to [SIZE]',
-                        description: 'set the font size for text printing'
-                    }),
-                    arguments: {
-                        SIZE: {
-                            type: ArgumentType.NUMBER,
-                            defaultValue: 16
-                        }
-                    },
-                    filter: [TargetType.SPRITE]
-                },
-                {
-                    opcode: 'setPrintFontColor',
-                    blockType: BlockType.COMMAND,
-                    text: formatMessage({
-                        id: 'pen.setPrintFontColor',
-                        default: 'set print font color to [COLOR]',
-                        description: 'set the color for text printing'
-                    }),
-                    arguments: {
-                        COLOR: {
-                            type: ArgumentType.COLOR
-                        }
-                    },
-                    filter: [TargetType.SPRITE]
-                },
-                {
-                    opcode: 'setPrintFontStrokeColor',
-                    blockType: BlockType.COMMAND,
-                    text: formatMessage({
-                        id: 'pen.setPrintFontStrokeColor',
-                        default: 'set print font stroke color to [COLOR]',
-                        description: 'set the stroke color for text printing'
-                    }),
-                    arguments: {
-                        COLOR: {
-                            type: ArgumentType.COLOR
-                        }
-                    },
-                    filter: [TargetType.SPRITE]
-                },
-                {
-                    opcode: 'setPrintFontStrokeWidth',
-                    blockType: BlockType.COMMAND,
-                    text: formatMessage({
-                        id: 'pen.setPrintFontStrokeWidth',
-                        default: 'set print font stroke width to [WIDTH]',
-                        description: 'set the stroke width for text printing'
-                    }),
-                    arguments: {
-                        WIDTH: {
-                            type: ArgumentType.NUMBER,
-                            defaultValue: 0
-                        }
-                    },
-                    filter: [TargetType.SPRITE]
-                },
-                {
-                    opcode: 'setPrintFontWeight',
-                    blockType: BlockType.COMMAND,
-                    text: formatMessage({
-                        id: 'pen.setPrintFontWeight',
-                        default: 'set print font weight to [WEIGHT]',
-                        description: 'set the font weight for text printing'
-                    }),
-                    arguments: {
-                        WEIGHT: {
-                            type: ArgumentType.STRING,
-                            menu: 'fontWeight',
-                            defaultValue: 'normal'
-                        }
-                    },
-                    filter: [TargetType.SPRITE]
-                },
-                {
-                    opcode: 'setPrintFontItalics',
-                    blockType: BlockType.COMMAND,
-                    text: formatMessage({
-                        id: 'pen.setPrintFontItalics',
-                        default: 'set print font italic [OPTION]',
-                        description: 'set the font italic style for text printing'
-                    }),
-                    arguments: {
-                        OPTION: {
-                            type: ArgumentType.STRING,
-                            menu: 'italicOptions',
-                            defaultValue: 'off'
-                        }
-                    },
-                    filter: [TargetType.SPRITE]
-                },
-                {
-                    opcode: 'printText',
-                    blockType: BlockType.COMMAND,
-                    text: formatMessage({
-                        id: 'pen.printText',
-                        default: 'print [TEXT] at x: [X] y: [Y]',
-                        description: 'print text at specified coordinates'
-                    }),
-                    arguments: {
-                        TEXT: {
-                            type: ArgumentType.STRING,
-                            defaultValue: 'Hello!'
-                        },
-                        X: {
-                            type: ArgumentType.NUMBER,
-                            defaultValue: 0
-                        },
-                        Y: {
-                            type: ArgumentType.NUMBER,
-                            defaultValue: 0
-                        }
-                    },
-                    filter: [TargetType.SPRITE]
-                },
                 /* Legacy blocks, should not be shown in flyout */
                 {
                     opcode: 'setPenShadeToNumber',
@@ -709,29 +510,6 @@ class Scratch3PenBlocks {
                 colorParam: {
                     acceptReporters: true,
                     items: this._initColorParam()
-                },
-                fontWeight: {
-                    acceptReporters: true,
-                    items: [
-                        'normal',
-                        'bold',
-                        '100',
-                        '200',
-                        '300',
-                        '400',
-                        '500',
-                        '600',
-                        '700',
-                        '800',
-                        '900'
-                    ]
-                },
-                italicOptions: {
-                    acceptReporters: true,
-                    items: [
-                        'off',
-                        'on'
-                    ]
                 }
             }
         };
@@ -1032,218 +810,6 @@ class Scratch3PenBlocks {
         penState.brightness = 100 * hsv.v;
 
         this._updatePenColor(penState);
-    }
-
-    /**
-     * Set the font for text printing.
-     * @param {object} args - the block arguments.
-     * @param {object} util - utility object provided by the runtime.
-     */
-    setPrintFont (args, util) {
-        const penState = this._getPenState(util.target);
-        penState.printTextAttribute.font = Cast.toString(args.FONT);
-    }
-
-    /**
-     * Set the font size for text printing.
-     * @param {object} args - the block arguments.
-     * @param {object} util - utility object provided by the runtime.
-     */
-    setPrintFontSize (args, util) {
-        const penState = this._getPenState(util.target);
-        penState.printTextAttribute.size = Cast.toNumber(args.SIZE);
-    }
-
-    /**
-     * Set the font color for text printing.
-     * @param {object} args - the block arguments.
-     * @param {object} util - utility object provided by the runtime.
-     */
-    setPrintFontColor (args, util) {
-        const penState = this._getPenState(util.target);
-        const rgbObject = Cast.toRgbColorObject(args.COLOR);
-        const hexColor = Color.rgbToHex(rgbObject);
-        penState.printTextAttribute.color = hexColor;
-    }
-
-    /**
-     * Set the font stroke color for text printing.
-     * @param {object} args - the block arguments.
-     * @param {object} util - utility object provided by the runtime.
-     */
-    setPrintFontStrokeColor (args, util) {
-        const penState = this._getPenState(util.target);
-        const rgbObject = Cast.toRgbColorObject(args.COLOR);
-        const hexColor = Color.rgbToHex(rgbObject);
-        penState.printTextAttribute.strokeColor = hexColor;
-    }
-
-    /**
-     * Set the font stroke width for text printing.
-     * @param {object} args - the block arguments.
-     * @param {object} util - utility object provided by the runtime.
-     */
-    setPrintFontStrokeWidth (args, util) {
-        const penState = this._getPenState(util.target);
-        penState.printTextAttribute.strokeWidth = Cast.toNumber(args.WIDTH);
-    }
-
-    /**
-     * Set the font weight for text printing.
-     * @param {object} args - the block arguments.
-     * @param {object} util - utility object provided by the runtime.
-     */
-    setPrintFontWeight (args, util) {
-        const penState = this._getPenState(util.target);
-        penState.printTextAttribute.weight = Cast.toString(args.WEIGHT);
-    }
-
-    /**
-     * Set the font italic style for text printing.
-     * @param {object} args - the block arguments.
-     * @param {object} util - utility object provided by the runtime.
-     */
-    setPrintFontItalics (args, util) {
-        const penState = this._getPenState(util.target);
-        penState.printTextAttribute.italic = args.OPTION === 'on';
-    }
-
-    /**
-     * Print text at specified coordinates.
-     * @param {object} args - the block arguments.
-     * @param {object} util - utility object provided by the runtime.
-     */
-    printText (args, util) {
-        const penState = this._getPenState(util.target);
-        const context = this._getBitmapCanvas();
-        
-        // Build font string
-        let fontString = '';
-        if (penState.printTextAttribute.italic) {
-            fontString += 'italic ';
-        }
-        fontString += `${penState.printTextAttribute.weight} `;
-        fontString += `${penState.printTextAttribute.size}px `;
-        fontString += penState.printTextAttribute.font;
-        
-        context.font = fontString;
-        context.strokeStyle = penState.printTextAttribute.strokeWidth > 0 ?
-            penState.printTextAttribute.strokeColor : penState.printTextAttribute.color;
-        context.lineWidth = penState.printTextAttribute.strokeWidth;
-        context.fillStyle = penState.printTextAttribute.color;
-        
-        const x = Cast.toNumber(args.X);
-        const y = Cast.toNumber(args.Y);
-        const text = Cast.toString(args.TEXT);
-        
-        // Draw stroke if stroke width > 0
-        if (penState.printTextAttribute.strokeWidth > 0) {
-            context.strokeText(text, x, -y);
-        }
-        context.fillText(text, x, -y);
-        
-        this._drawContextToPen(context);
-    }
-
-    drawTriangle (args, util) {
-        const x0 = Cast.toNumber(args.X0);
-        const y0 = Cast.toNumber(args.Y0);
-        const x1 = Cast.toNumber(args.X1);
-        const y1 = Cast.toNumber(args.Y1);
-        const x2 = Cast.toNumber(args.X2);
-        const y2 = Cast.toNumber(args.Y2);
-        this._triangle(x0, y0, x1, y1, x2, y2, util.target);
-    }
-
-    _triangle (x0, y0, x1, y1, x2, y2, target) { // used by compiler
-        const penSkinId = this._getPenLayerID();
-        if (penSkinId < 0) return;
-
-        const penAtt = this._getPenState(target).penAttributes;
-
-        this.runtime.renderer.penTriangle(penSkinId, penAtt, x0, y0, x1, y1, x2, y2);
-    }
-
-    /**
-     * Get a bitmap canvas for drawing operations.
-     * @returns {CanvasRenderingContext2D} the 2D context of the bitmap canvas.
-     * @private
-     */
-    _getBitmapCanvas () {
-        const penLayerID = this._getPenLayerID();
-        if (penLayerID < 0) {
-            // If pen layer doesn't exist, create a default canvas
-            this.bitmapCanvas.width = 480;
-            this.bitmapCanvas.height = 360;
-            const context = this.bitmapCanvas.getContext('2d');
-            context.clearRect(0, 0, 480, 360);
-            context.translate(240, 180);
-            return context;
-        }
-        
-        const penSkin = this.runtime.renderer._allSkins[penLayerID];
-        const width = penSkin._size[0];
-        const height = penSkin._size[1];
-        
-        this.bitmapCanvas.width = width;
-        this.bitmapCanvas.height = height;
-        
-        const context = this.bitmapCanvas.getContext('2d');
-        context.clearRect(0, 0, width, height);
-        context.translate(width / 2, height / 2);
-        context.scale(penSkin.renderQuality, penSkin.renderQuality);
-        
-        return context;
-    }
-
-    /**
-     * Draw the bitmap context to the pen layer.
-     * @param {CanvasRenderingContext2D} context - the context to draw from.
-     * @private
-     */
-    _drawContextToPen (context) {
-        const penLayerID = this._getPenLayerID();
-        if (penLayerID < 0) return;
-        
-        const width = this.bitmapCanvas.width;
-        const height = this.bitmapCanvas.height;
-        
-        // Make sure we have a renderer
-        if (!this.runtime.renderer) return;
-        
-        context.restore();
-        
-        // Create or update bitmap skin
-        if (this.bitmapSkinID < 0 && this.runtime.renderer.createBitmapSkin) {
-            // Create initial empty imageData with canvas dimensions
-            const initialImageData = context.createImageData(width, height);
-            this.bitmapSkinID = this.runtime.renderer.createBitmapSkin(initialImageData, 1);
-            this.bitmapDrawableID = this.runtime.renderer.createDrawable(StageLayering.PEN_LAYER);
-            this.runtime.renderer.updateDrawableSkinId(this.bitmapDrawableID, this.bitmapSkinID);
-        }
-        
-        if (this.bitmapSkinID >= 0) {
-            const bitmapSkin = this.runtime.renderer._allSkins[this.bitmapSkinID];
-            if (bitmapSkin && bitmapSkin._setTexture) {
-                const imageData = context.getImageData(0, 0, width, height);
-                bitmapSkin._setTexture(imageData);
-                
-                this.runtime.renderer.penStamp(penLayerID, this.bitmapDrawableID);
-                this.runtime.requestRedraw();
-            }
-        }
-    }
-
-    _printText (text, x, y, target) { // used by compiler
-        const args = {
-            TEXT: text,
-            X: x,
-            Y: y
-        };
-        const util = {
-            target: target
-        };
-        this.printText(args, util);
     }
 }
 

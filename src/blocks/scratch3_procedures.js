@@ -117,20 +117,12 @@ class Scratch3ProcedureBlocks {
     argumentReporterBoolean (args, util) {
         const value = util.getParam(args.VALUE);
         if (value === null) {
-            // tw: implement is compiled? and is mistwarp?
-            const normalizeValue = input => {
-                const lowered = String(input)
-                    .toLowerCase()
-                    .trim()
-                    .replace(/\s+/g, ' ');
-                return lowered.endsWith('?') ? lowered.slice(0, -1).trim() : lowered;
-            };
-
-            const normalizedValue = normalizeValue(args.VALUE);
-            if (util.target.runtime.compilerOptions.enabled && normalizedValue === 'is compiled') {
+            // tw: implement is compiled? and is turbowarp?
+            const lowercaseValue = String(args.VALUE).toLowerCase();
+            if (util.target.runtime.compilerOptions.enabled && lowercaseValue === 'is compiled?') {
                 return true;
             }
-            if (normalizedValue === 'is mistwarp') {
+            if (lowercaseValue === 'is turbowarp?') {
                 return true;
             }
             // When the parameter is not found in the most recent procedure

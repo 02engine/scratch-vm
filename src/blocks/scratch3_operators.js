@@ -32,8 +32,6 @@ class Scratch3OperatorsBlocks {
             operator_length: this.length,
             operator_contains: this.contains,
             operator_mod: this.mod,
-            operator_pi: this.pi,
-            operator_newline: this.newline,
             operator_round: this.round,
             operator_mathop: this.mathop
         };
@@ -127,14 +125,6 @@ class Scratch3OperatorsBlocks {
         // Scratch mod uses floored division instead of truncated division.
         if (result / modulus < 0) result += modulus;
         return result;
-    }
-
-    pi () {
-        return Math.PI;
-    }
-
-    newline () {
-        return '\n';
     }
 
     round (args) {

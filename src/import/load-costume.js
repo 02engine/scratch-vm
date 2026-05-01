@@ -453,7 +453,7 @@ const loadCostume = function (md5ext, costume, runtime, optVersion) {
 
     // Need to load the costume from storage. The server should have a reference to this md5.
     if (!runtime.storage) {
-        log.warn('No storage module present; cannot load costume asset: ', md5ext);
+        //log.warn('No storage module present; cannot load costume asset: ', md5ext);
         return Promise.resolve(costume);
     }
 

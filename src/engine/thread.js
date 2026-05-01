@@ -481,6 +481,24 @@ class Thread {
         const canCache = !this.stackClick;
 
         const topBlock = this.topBlock;
+        const precompiledResult = this.target.runtime.getCompiledScript(this.target, topBlock);
+        if (precompiledResult) {
+            this.procedures = {};
+            for (const procedureCode of Object.keys(precompiledResult.procedures)) {
+                this.procedures[procedureCode] = precompiledResult.procedures[procedureCode](this);
+            }
+
+            this.generator = precompiledResult.script.startingFunction(this)();
+            this.executableHat = precompiledResult.script.executableHat;
+
+            if (!this.blockContainer.forceNoGlow) {
+                this.blockGlowInFrame = this.topBlock;
+                this.requestScriptGlowInFrame = true;
+            }
+
+            this.isCompiled = true;
+            return;
+        }
         // Flyout blocks are stored in a special block container.
         const blocks = this.blockContainer.getBlock(topBlock) ? this.blockContainer : this.target.runtime.flyoutBlocks;
         const cachedResult = canCache && blocks.getCachedCompileResult(topBlock);

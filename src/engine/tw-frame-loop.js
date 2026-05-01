@@ -39,6 +39,7 @@ class FrameLoop {
         this.runtime = runtime;
         this.running = false;
         this.setFramerate(30);
+        this.setOpsPerFrame(1);
         this.setInterpolation(false);
         this._lastRenderTime = 0;
         this._lastStepTime = 0;
@@ -55,6 +56,10 @@ class FrameLoop {
         this.framerate = fps;
         this._restart();
     }
+    setOpsPerFrame(opf) {
+      this.opsPerFrame = opf;
+      this._restart();
+    }
 
     setInterpolation (interpolation) {
         this.interpolation = interpolation;
@@ -62,13 +67,17 @@ class FrameLoop {
     }
 
     stepCallback () {
+      for (let i = 0; i <this.opsPerFrame; i++) {
         this.runtime._step();
+      }
         this._lastStepTime = this.now();
     }
 
     stepImmediateCallback () {
         if (this.now() - this._lastStepTime >= this.runtime.currentStepTime) {
-            this.runtime._step();
+      for (let i = 0; i <this.opsPerFrame; i++) {
+        this.runtime._step();
+      }
             this._lastStepTime = this.now();
         }
     }
