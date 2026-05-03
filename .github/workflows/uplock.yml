@@ -1,0 +1,43 @@
+name: Update package-lock.json
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    # 必须开启写权限，否则无法提交代码
+    permissions:
+      contents: write
+
+    steps:
+    - name: Check Out
+      uses: actions/checkout@v4
+      with:
+        # 默认情况下 checkout 是只读的，这里确保可以推送
+        token: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Install Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: 22
+
+    - name: Generate package-lock.json
+      run: npm install --package-lock-only
+
+    - name: Commit and Push
+      run: |
+        # 配置 Git 用户信息（使用 GitHub Actions 机器人账号）
+        git config --global user.name "github-actions[bot]"
+        git config --global user.email "github-actions[bot]@users.noreply.github.com"
+        
+        # 检查是否有文件变化
+        if [ -n "$(git status --porcelain)" ]; then
+          echo "检测到 package-lock.json 变化，正在提交..."
+          git add package-lock.json
+          git commit -m "chore: 自动更新 package-lock.json [skip ci]"
+          git push origin HEAD:main
+        else
+          echo "文件无变化，跳过提交。"
+        fi
