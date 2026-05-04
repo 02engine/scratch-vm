@@ -6,8 +6,6 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    
-    # 必须开启写权限，否则无法提交代码
     permissions:
       contents: write
 
@@ -15,7 +13,6 @@ jobs:
     - name: Check Out
       uses: actions/checkout@v4
       with:
-        # 默认情况下 checkout 是只读的，这里确保可以推送
         token: ${{ secrets.GITHUB_TOKEN }}
 
     - name: Install Node.js
@@ -24,18 +21,23 @@ jobs:
         node-version: 22
 
     - name: Generate package-lock.json
-      run: npm install --package-lock-only --ignore-script
+      run: |
+        # 如果你的项目是 scratch-gui 这种结构，确保在正确的文件夹下执行
+        # 如果是根目录直接执行：
+        npm install --package-lock-only --ignore-scripts
 
     - name: Commit and Push
       run: |
-        # 配置 Git 用户信息（使用 GitHub Actions 机器人账号）
         git config --global user.name "github-actions[bot]"
         git config --global user.email "github-actions[bot]@users.noreply.github.com"
         
-        # 检查是否有文件变化
-        if [ -n "$(git status --porcelain)" ]; then
+        # 核心更正 1：强制只添加 package-lock.json，忽略 node_modules 下的临时文件
+        git add package-lock.json
+        
+        # 核心更正 2：使用 git diff-index 检查已暂存的 (staged) 文件是否有变化
+        # 这样可以精准避开 untracked 干扰
+        if ! git diff-index --quiet HEAD --; then
           echo "检测到 package-lock.json 变化，正在提交..."
-          git add package-lock.json
           git commit -m "chore: 自动更新 package-lock.json [skip ci]"
           git push origin HEAD:main
         else
