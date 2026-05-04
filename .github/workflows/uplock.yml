@@ -24,7 +24,7 @@ jobs:
         node-version: 22
 
     - name: Generate package-lock.json
-      run: npm install --package-lock-only
+      run: npm install --package-lock-only --ignore-script
 
     - name: Commit and Push
       run: |
