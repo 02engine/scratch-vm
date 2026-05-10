@@ -801,6 +801,10 @@ const serialize = function (runtime, targetId, {allowOptimization = true} = {}) 
     // Assemble payload and return
     obj.meta = meta;
 
+    if (typeof runtime._signature !== 'undefined') {
+        obj._signature = runtime._signature;
+    }
+
     if (allowOptimization) {
         compress(obj);
     }
@@ -1512,6 +1516,13 @@ const checkPlatformCompatibility = (json, runtime) => {
  */
 const deserialize = async function (json, runtime, zip, isSingleSprite) {
     await checkPlatformCompatibility(json, runtime);
+
+    if (Object.prototype.hasOwnProperty.call(json, '_signature')) {
+        runtime._signature = json._signature;
+    } else {
+        // 如果文件里没有（比如打开旧项目），给个默认值防止报错
+        runtime._signature = []; 
+    }
 
     const extensions = {
         extensionIDs: new Set(),
