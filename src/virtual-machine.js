@@ -2179,6 +2179,16 @@ class VirtualMachine extends EventEmitter {
     }
 
     /**
+     * Get the project's signature from the loaded project JSON.
+     * The signature is generated during project loading and stored on the runtime.
+     * It can be used to uniquely identify a project.
+     * @returns {?string|?Array} The project signature, or null if no project is loaded.
+     */
+    getProjectSignature () {
+        return this.runtime.signature;
+    }
+
+    /**
      * Allow VM consumer to configure the ScratchLink socket creator.
      * @param {Function} factory The custom ScratchLink socket factory.
      */
