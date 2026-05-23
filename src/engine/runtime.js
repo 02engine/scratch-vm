@@ -2179,9 +2179,9 @@ class Runtime extends EventEmitter {
 
         if (this._coordinateSkinId === null) {
             this._createCoordinate();
-        } else {
-            this._setCoordinateVisible(visible);
         }
+        
+        this._setCoordinateVisible(visible);
     }
 
     /**
