@@ -560,7 +560,7 @@ class Runtime extends EventEmitter {
          */
         this.finishedAssetRequests = 0;
 
-        this._signature = [];
+        this.signature = null;
     }
 
     clearCompiledProjectData () {

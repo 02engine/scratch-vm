@@ -801,8 +801,15 @@ const serialize = function (runtime, targetId, {allowOptimization = true} = {}) 
     // Assemble payload and return
     obj.meta = meta;
 
-    if (typeof runtime._signature !== 'undefined') {
-        obj._signature = runtime._signature;
+    if (typeof runtime.signature !== 'undefined' && runtime.signature && (!Array.isArray(runtime.signature) || runtime.signature.length > 0)) {
+        obj.signature = runtime.signature;
+    } else {
+        let generatedUuid = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+            var r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);
+            return v.toString(16);
+        });
+        runtime.signature = generatedUuid;
+        obj.signature = generatedUuid;
     }
 
     if (allowOptimization) {
@@ -1517,11 +1524,17 @@ const checkPlatformCompatibility = (json, runtime) => {
 const deserialize = async function (json, runtime, zip, isSingleSprite) {
     await checkPlatformCompatibility(json, runtime);
 
-    if (Object.prototype.hasOwnProperty.call(json, '_signature')) {
-        runtime._signature = json._signature;
-    } else {
-        // 如果文件里没有（比如打开旧项目），给个默认值防止报错
-        runtime._signature = []; 
+    if (json && typeof json === 'object') {
+        if (!json.signature || (Array.isArray(json.signature) && json.signature.length === 0)) {
+            let generatedUuid = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+                var r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);
+                return v.toString(16);
+            });
+            
+            json.signature = generatedUuid;
+            log.info(`[Signature Injector] GeneratedUUID: ${generatedUuid}`);
+        }
+        runtime.signature = json.signature;
     }
 
     const extensions = {
