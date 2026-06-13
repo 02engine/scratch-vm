@@ -1,6 +1,7 @@
 const dispatch = require('../dispatch/central-dispatch');
 const log = require('../util/log');
 const maybeFormatMessage = require('../util/maybe-format-message');
+const isAdvancedValue = require('../util/is-advanced-value');
 
 const BlockType = require('./block-type');
 const SecurityManager = require('./tw-security-manager');
@@ -232,6 +233,24 @@ class ExtensionManager {
             const fakeWorkerId = this.nextExtensionWorker++;
             this.workerURLs[fakeWorkerId] = extensionURL;
 
+            if ((!extensionObjects || extensionObjects.length === 0) && global.tempExt && global.tempExt.Extension) {
+                const tempExtensionInfo = global.tempExt.info || {};
+                const tempExtensionId = tempExtensionInfo.extensionId || tempExtensionInfo.id;
+                if (!tempExtensionId) {
+                    throw new Error('tempExt is missing extension id');
+                }
+
+                const tempExtensionInstance = new global.tempExt.Extension(this.runtime);
+                const serviceName = `unsandboxed.${fakeWorkerId}.${tempExtensionId}`;
+                dispatch.setServiceSync(serviceName, tempExtensionInstance);
+                dispatch.callSync('extensions', 'registerExtensionServiceSync', serviceName);
+                this._loadedExtensions.set(tempExtensionId, serviceName);
+                delete global.tempExt;
+
+                this._finishedLoadingExtensionScript();
+                return;
+            }
+
             for (const extensionObject of extensionObjects) {
                 const extensionInfo = extensionObject.getInfo();
                 const serviceName = `unsandboxed.${fakeWorkerId}.${extensionInfo.id}`;
@@ -307,6 +326,8 @@ class ExtensionManager {
         }
 
         dispatch.call('runtime', '_unregisterExtensionPrimitives', extensionURL);
+        // Notify listeners so extensions can release resources (e.g. Spine textures/skeletons / GPU memory).
+        this.runtime.emit('EXTENSION_DELETED', {id: extensionURL});
     }
 
     /**
@@ -606,12 +627,21 @@ class ExtensionManager {
                             .then(result => {
                                 // Scratch is only designed to handle these types.
                                 // If any other value comes in such as undefined, null, an object, etc.
-                                // we'll convert it to a string to avoid undefined behavior.
+                                // we'll normally convert it to a string to avoid undefined behavior.
+                                // CCW/Gandi-style advanced data structures intentionally return rich objects
+                                // (e.g. HTMLReport / Spine*Report) which must keep object identity so that
+                                // follow-up blocks can inspect them with instanceof/valueOf.
                                 if (
                                     typeof result === 'number' ||
                                     typeof result === 'string' ||
                                     typeof result === 'boolean'
                                 ) {
+                                    return result;
+                                }
+                                if (isAdvancedValue(result)) {
+                                    return result;
+                                }
+                                if (result && typeof result === 'object') {
                                     return result;
                                 }
                                 return `${result}`;

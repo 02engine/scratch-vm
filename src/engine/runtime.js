@@ -23,6 +23,8 @@ const ScratchLinkWebSocket = require('../util/scratch-link-websocket');
 const FontManager = require('./tw-font-manager');
 const fetchWithTimeout = require('../util/fetch-with-timeout');
 const platform = require('./tw-platform.js');
+const globalFormatMessage = require('format-message');
+const isAdvancedValue = require('../util/is-advanced-value');
 
 // Virtual I/O devices.
 const Clock = require('../io/clock');
@@ -544,6 +546,19 @@ class Runtime extends EventEmitter {
          */
         this.fontManager = new FontManager(this);
 
+        this.logSystem = {
+            info: (...args) => console.info(...args),
+            log: (...args) => console.log(...args),
+            warn: (...args) => console.warn(...args),
+            error: (...args) => console.error(...args)
+        };
+
+        this.ccwAPI = {};
+
+        this.SafeObject = {
+            getActualObject: value => value
+        };
+
         /**
          * Maps extension ID to a JSON-serializable value.
          * @type {Object.<string, object>}
@@ -561,6 +576,22 @@ class Runtime extends EventEmitter {
         this.finishedAssetRequests = 0;
 
         this.signature = null;
+    }
+
+    attachBlocks (scratchBlocks) {
+        this.scratchBlocks = scratchBlocks;
+    }
+
+    setCCWAPI (ccwAPI) {
+        this.ccwAPI = ccwAPI;
+    }
+
+    getFormatMessage (message) {
+        const formatMessage = globalFormatMessage.namespace();
+        return (...args) => {
+            formatMessage.setup({locale: globalFormatMessage.setup().locale, translations: message});
+            return formatMessage(...args);
+        };
     }
 
     clearCompiledProjectData () {
@@ -1427,7 +1458,10 @@ class Runtime extends EventEmitter {
                 case 'string':
                     return [formattedItem, formattedItem];
                 case 'object':
-                    return [maybeFormatMessage(item.text, extensionMessageContext), item.value];
+                    return [
+                        maybeFormatMessage(item.text, extensionMessageContext),
+                        typeof item.value === 'string' ? item.value : String(item.value)
+                    ];
                 default:
                     throw new Error(`Can't interpret menu item: ${JSON.stringify(item)}`);
                 }
@@ -1837,6 +1871,7 @@ class Runtime extends EventEmitter {
         // Determine whether the argument type is one of the known standard field types
         const argInfo = context.blockInfo.arguments[placeholder] || {};
         let argTypeInfo = ArgumentTypeMap[argInfo.type] || {};
+        const isDynamicPlaceholder = argInfo.type === null;
 
         // Field type not a standard field type, see if extension has registered custom field type
         if (!ArgumentTypeMap[argInfo.type] && context.categoryInfo.customFieldTypes[argInfo.type]) {
@@ -1861,7 +1896,7 @@ class Runtime extends EventEmitter {
             };
 
             const defaultValue =
-                typeof argInfo.defaultValue === 'undefined' ? null :
+                isDynamicPlaceholder || typeof argInfo.defaultValue === 'undefined' ? null :
                     maybeFormatMessage(argInfo.defaultValue, this.makeMessageContextForTarget()).toString();
 
             if (argTypeInfo.check) {
@@ -1891,6 +1926,12 @@ class Runtime extends EventEmitter {
                 valueName = placeholder;
                 shadowType = (argTypeInfo.shadow && argTypeInfo.shadow.type) || null;
                 fieldName = (argTypeInfo.shadow && argTypeInfo.shadow.fieldName) || null;
+            }
+
+            if (isDynamicPlaceholder) {
+                valueName = placeholder;
+                shadowType = null;
+                fieldName = null;
             }
 
             // <value> is the ScratchBlocks name for a block input.
@@ -3380,9 +3421,21 @@ class Runtime extends EventEmitter {
      * @param {string} blockId ID for the block.
      * @param {string} value Value to show associated with the block.
      */
-    visualReport (target, blockId, value) {
+    visualReport (targetOrBlockId, blockIdOrValue, optionalValue) {
+        let target = targetOrBlockId;
+        let blockId = blockIdOrValue;
+        let value = optionalValue;
+
+        // Gandi/CCW-style call signature: visualReport(blockId, value)
+        if (arguments.length === 2 || (arguments.length >= 2 && typeof targetOrBlockId === 'string')) {
+            target = this.getEditingTarget();
+            blockId = targetOrBlockId;
+            value = blockIdOrValue;
+        }
+
         if (target === this.getEditingTarget()) {
-            this.emit(Runtime.VISUAL_REPORT, {id: blockId, value: String(value)});
+            const visualValue = isAdvancedValue(value) ? value : String(value);
+            this.emit(Runtime.VISUAL_REPORT, {id: blockId, value: visualValue});
         }
     }
 
@@ -3407,6 +3460,10 @@ class Runtime extends EventEmitter {
      * @return {boolean} true if monitor exists in the state and was updated, false if it did not exist.
      */
     requestUpdateMonitor (monitor) {
+        const advancedValue = monitor && typeof monitor.get === 'function' ? monitor.get('value') : null;
+        if (isAdvancedValue(advancedValue) && typeof advancedValue.toString === 'function') {
+            monitor = monitor.set('value', advancedValue.toString());
+        }
         const id = monitor.get('id');
         if (this._monitorState.has(id)) {
             this._monitorState =

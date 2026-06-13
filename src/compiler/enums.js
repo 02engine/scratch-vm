@@ -88,7 +88,10 @@ const InputType = {
     ANY: 0x1FFF,
 
     /** An array of values in the form [R, G, B] */
-    COLOR: 0x2000
+    COLOR: 0x2000,
+
+    /** A Gandi/CCW-style advanced value object which must preserve identity through compat-layer blocks. */
+    ADVANCED: 0x4000
 };
 
 /**

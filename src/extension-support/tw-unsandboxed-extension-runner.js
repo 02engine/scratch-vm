@@ -27,12 +27,20 @@ const parseURL = url => {
 const createUnsandboxedExtensionAPI = vm => {
     const extensionObjects = [];
     let resolveExtensionObjects;
+    let hasResolved = false;
     const promise = new Promise(resolve => {
         resolveExtensionObjects = resolve;
     });
 
     const register = extensionObject => {
         extensionObjects.push(extensionObject);
+    };
+
+    const finalizeRegistration = () => {
+        if (hasResolved) {
+            return;
+        }
+        hasResolved = true;
         resolveExtensionObjects(extensionObjects);
     };
 
@@ -43,6 +51,7 @@ const createUnsandboxedExtensionAPI = vm => {
         register
     };
     Scratch.vm = vm;
+    Scratch.runtime = vm.runtime;
     Scratch.renderer = vm.runtime.renderer;
 
     Scratch.canFetch = async url => {
@@ -164,6 +173,7 @@ const createUnsandboxedExtensionAPI = vm => {
     vm.emit('CREATE_UNSANDBOXED_EXTENSION_API', Scratch);
 
     return {
+        finalizeRegistration,
         promise,
         Scratch,
         ScratchExtensions
@@ -395,6 +405,10 @@ const loadUnsandboxedExtensionWithPrivateScratch = async (extensionURL, vm) => {
         throw new Error(`Error in unsandboxed script ${extensionURL}. Check the console for more information.`);
     }
 
+    await Promise.resolve();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    api.finalizeRegistration();
+
     return api.promise;
 };
 
@@ -420,6 +434,10 @@ const loadUnsandboxedExtensionWithSharedGlobal = async (extensionURL, vm) => {
     } catch (error) {
         throw new Error(`Error in unsandboxed script ${extensionURL}. Check the console for more information.`);
     }
+
+    await Promise.resolve();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    api.finalizeRegistration();
 
     const objects = await api.promise;
     teardownUnsandboxedExtensionAPI();

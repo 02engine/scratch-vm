@@ -1265,7 +1265,7 @@ class ScriptTreeGenerator {
         for (const name of Object.keys(block.fields)) {
             fields[name] = block.fields[name].value;
         }
-        return new IntermediateInput(InputOpcode.COMPATIBILITY_LAYER, InputType.ANY, {
+        return new IntermediateInput(InputOpcode.COMPATIBILITY_LAYER, InputType.ADVANCED, {
             opcode: block.opcode,
             id: block.id,
             inputs,

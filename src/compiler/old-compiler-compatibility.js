@@ -98,7 +98,7 @@ class ScriptTreeGeneratorStub {
     descendInputFromNewCompiler (block) {
         const node = this.descendInput.call(this.fakeThis, block);
         if (node) {
-            return new IntermediateInput(InputOpcode.OLD_COMPILER_COMPATIBILITY_LAYER, InputType.ANY, {
+            return new IntermediateInput(InputOpcode.OLD_COMPILER_COMPATIBILITY_LAYER, InputType.ADVANCED, {
                 oldNode: node
             }, true);
         }
@@ -186,6 +186,9 @@ class TypedInput {
     }
 
     asSafe () {
+        if (this.intermediate && this.intermediate.type === InputType.ADVANCED) {
+            return this.source;
+        }
         return this.asUnknown();
     }
 
