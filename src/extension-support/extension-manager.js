@@ -223,8 +223,7 @@ class ExtensionManager {
 
         //const sandboxMode = await this.securityManager.getSandboxMode(extensionURL);
         const sandboxMode='unsandboxed';
-        //const rewritten = await this.securityManager.rewriteExtensionURL(extensionURL);
-        const rewritten = extensionURL;
+        const rewritten = await this.securityManager.rewriteExtensionURL(extensionURL);
 
         if (sandboxMode === 'unsandboxed') {
             const {load} = require('./tw-unsandboxed-extension-runner');
@@ -233,30 +232,63 @@ class ExtensionManager {
             const fakeWorkerId = this.nextExtensionWorker++;
             this.workerURLs[fakeWorkerId] = extensionURL;
 
-            if ((!extensionObjects || extensionObjects.length === 0) && global.tempExt && global.tempExt.Extension) {
-                const tempExtensionInfo = global.tempExt.info || {};
-                const tempExtensionId = tempExtensionInfo.extensionId || tempExtensionInfo.id;
-                if (!tempExtensionId) {
-                    throw new Error('tempExt is missing extension id');
+            const registerUnsandboxedObject = extensionObject => {
+                const extensionInfo = extensionObject.getInfo();
+                const serviceName = `unsandboxed.${fakeWorkerId}.${extensionInfo.id}`;
+                dispatch.setServiceSync(serviceName, extensionObject);
+                dispatch.callSync('extensions', 'registerExtensionServiceSync', serviceName);
+                this._loadedExtensions.set(extensionInfo.id, serviceName);
+            };
+
+            if (!extensionObjects || extensionObjects.length === 0) {
+                if (global.IIFEExtensionInfoList) {
+                    for (const item of global.IIFEExtensionInfoList) {
+                        if (item && item.extensionInstance) {
+                            registerUnsandboxedObject(item.extensionInstance);
+                        }
+                    }
+                    delete global.IIFEExtensionInfoList;
                 }
 
-                const tempExtensionInstance = new global.tempExt.Extension(this.runtime);
-                const serviceName = `unsandboxed.${fakeWorkerId}.${tempExtensionId}`;
-                dispatch.setServiceSync(serviceName, tempExtensionInstance);
-                dispatch.callSync('extensions', 'registerExtensionServiceSync', serviceName);
-                this._loadedExtensions.set(tempExtensionId, serviceName);
-                delete global.tempExt;
+                if (global.ExtensionLib) {
+                    for (const key of Object.keys(global.ExtensionLib)) {
+                        const obj = global.ExtensionLib[key];
+                        if (obj && obj.Extension) {
+                            registerUnsandboxedObject(new obj.Extension(this.runtime));
+                        }
+                    }
+                    delete global.ExtensionLib;
+                }
+
+                if (global.scratchExtensions && typeof global.scratchExtensions.default === 'function') {
+                    const libModule = await global.scratchExtensions.default();
+                    const lib = libModule && libModule.default ? libModule.default : libModule;
+                    for (const key of Object.keys(lib || {})) {
+                        const obj = lib[key];
+                        if (!obj) continue;
+                        if (obj.Extension) {
+                            registerUnsandboxedObject(new obj.Extension(this.runtime));
+                        }
+                    }
+                    delete global.scratchExtensions;
+                }
+
+                if (global.tempExt && global.tempExt.Extension) {
+                    const tempExtensionInfo = global.tempExt.info || {};
+                    const tempExtensionId = tempExtensionInfo.extensionId || tempExtensionInfo.id;
+                    if (!tempExtensionId) {
+                        throw new Error('tempExt is missing extension id');
+                    }
+                    registerUnsandboxedObject(new global.tempExt.Extension(this.runtime));
+                    delete global.tempExt;
+                }
 
                 this._finishedLoadingExtensionScript();
                 return;
             }
 
             for (const extensionObject of extensionObjects) {
-                const extensionInfo = extensionObject.getInfo();
-                const serviceName = `unsandboxed.${fakeWorkerId}.${extensionInfo.id}`;
-                dispatch.setServiceSync(serviceName, extensionObject);
-                dispatch.callSync('extensions', 'registerExtensionServiceSync', serviceName);
-                this._loadedExtensions.set(extensionInfo.id, serviceName);
+                registerUnsandboxedObject(extensionObject);
             }
 
             this._finishedLoadingExtensionScript();

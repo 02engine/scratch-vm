@@ -34,6 +34,7 @@ const createUnsandboxedExtensionAPI = vm => {
 
     const register = extensionObject => {
         extensionObjects.push(extensionObject);
+        finalizeRegistration();
     };
 
     const finalizeRegistration = () => {
@@ -179,6 +180,13 @@ const createUnsandboxedExtensionAPI = vm => {
         ScratchExtensions
     };
 };
+
+const hasLegacyExtensionArtifacts = () => Boolean(
+    global.tempExt ||
+    global.ExtensionLib ||
+    global.scratchExtensions ||
+    global.IIFEExtensionInfoList
+);
 
 /**
  * Sets up the global.Scratch API for an unsandboxed extension.
@@ -407,7 +415,9 @@ const loadUnsandboxedExtensionWithPrivateScratch = async (extensionURL, vm) => {
 
     await Promise.resolve();
     await new Promise(resolve => setTimeout(resolve, 0));
-    api.finalizeRegistration();
+    if (hasLegacyExtensionArtifacts()) {
+        api.finalizeRegistration();
+    }
 
     return api.promise;
 };
@@ -437,7 +447,9 @@ const loadUnsandboxedExtensionWithSharedGlobal = async (extensionURL, vm) => {
 
     await Promise.resolve();
     await new Promise(resolve => setTimeout(resolve, 0));
-    api.finalizeRegistration();
+    if (hasLegacyExtensionArtifacts()) {
+        api.finalizeRegistration();
+    }
 
     const objects = await api.promise;
     teardownUnsandboxedExtensionAPI();
