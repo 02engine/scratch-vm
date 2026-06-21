@@ -3461,7 +3461,7 @@ class Runtime extends EventEmitter {
      */
     requestUpdateMonitor (monitor) {
         const advancedValue = monitor && typeof monitor.get === 'function' ? monitor.get('value') : null;
-        if (isAdvancedValue(advancedValue) && typeof advancedValue.toString === 'function') {
+        if (!Array.isArray(advancedValue) && isAdvancedValue(advancedValue) && typeof advancedValue.toString === 'function') {
             monitor = monitor.set('value', advancedValue.toString());
         }
         const id = monitor.get('id');
