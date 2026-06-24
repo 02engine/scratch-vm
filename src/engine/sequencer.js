@@ -182,7 +182,7 @@ class Sequencer {
      */
     stepThread (thread) {
         if (thread.isCompiled) {
-            compilerExecute(thread);
+            thread.target.runtime.threadPerfExecute(thread);
             return;
         }
 

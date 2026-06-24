@@ -627,6 +627,14 @@ const execute = thread => {
     thread.generator.next();
 };
 
+const executeWithPerf = thread => {
+    globalState.thread = thread;
+    const start = performance.now();
+    thread.generator.next();
+    const elapsed = performance.now() - start;
+    thread.target.runtime.recordThreadPerf(thread, elapsed);
+};
+
 const threadStack = [];
 const saveGlobalState = () => {
     threadStack.push(globalState.thread);
@@ -665,5 +673,6 @@ execute.scopedEval = scopedEval;
 execute.runtimeFunctions = runtimeFunctions;
 execute.saveGlobalState = saveGlobalState;
 execute.restoreGlobalState = restoreGlobalState;
+execute.withPerf = executeWithPerf;
 
 module.exports = execute;

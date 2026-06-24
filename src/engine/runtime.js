@@ -559,6 +559,14 @@ class Runtime extends EventEmitter {
             getActualObject: value => value
         };
 
+        this.threadPerfEnabled = false;
+        this.threadPerfActive = false;
+        this.threadPerfExecute = compilerExecute;
+        this.threadPerfStats = new Map();
+        this.threadPerfTrackAll = true;
+        this.threadPerfSelectedKeys = new Set();
+        this.threadPerfExcludedKeys = new Set();
+
         /**
          * Maps extension ID to a JSON-serializable value.
          * @type {Object.<string, object>}
@@ -580,6 +588,71 @@ class Runtime extends EventEmitter {
 
     attachBlocks (scratchBlocks) {
         this.scratchBlocks = scratchBlocks;
+    }
+
+    setThreadPerfEnabled (enabled) {
+        this.threadPerfEnabled = Boolean(enabled);
+        this.threadPerfActive = this._computeThreadPerfActive();
+        this.threadPerfExecute = this.threadPerfActive ? compilerExecute.withPerf : compilerExecute;
+    }
+
+    setThreadPerfSelection ({trackAll, selectedKeys = [], excludedKeys = []} = {}) {
+        this.threadPerfTrackAll = trackAll !== false;
+        this.threadPerfSelectedKeys = new Set(selectedKeys);
+        this.threadPerfExcludedKeys = new Set(excludedKeys);
+        this.threadPerfActive = this._computeThreadPerfActive();
+        this.threadPerfExecute = this.threadPerfActive ? compilerExecute.withPerf : compilerExecute;
+    }
+
+    _computeThreadPerfActive () {
+        if (!this.threadPerfEnabled) {
+            return false;
+        }
+        if (this.threadPerfTrackAll) {
+            return true;
+        }
+        return this.threadPerfSelectedKeys.size > 0;
+    }
+
+    resetThreadPerfStats () {
+        this.threadPerfStats.clear();
+    }
+
+    recordThreadPerf (thread, elapsed) {
+        if (!this.threadPerfEnabled || !thread || !thread.target) {
+            return;
+        }
+        const key = `${thread.target.id}:${thread.topBlock}`;
+        if (this.threadPerfTrackAll) {
+            if (this.threadPerfExcludedKeys.has(key)) {
+                return;
+            }
+        } else if (!this.threadPerfSelectedKeys.has(key)) {
+            return;
+        }
+        const targetName = typeof thread.target.getName === 'function' ? thread.target.getName() : '';
+        const previous = this.threadPerfStats.get(key) || {
+            key,
+            threadKey: key,
+            targetId: thread.target.id,
+            targetName,
+            topBlockId: thread.topBlock,
+            compiled: !!thread.isCompiled,
+            count: 0,
+            totalTime: 0,
+            maxTime: 0,
+            lastTime: 0
+        };
+        previous.count += 1;
+        previous.totalTime += elapsed;
+        previous.maxTime = Math.max(previous.maxTime, elapsed);
+        previous.lastTime = elapsed;
+        previous.avgTime = previous.totalTime / previous.count;
+        this.threadPerfStats.set(key, previous);
+    }
+
+    getThreadPerfSnapshot () {
+        return Array.from(this.threadPerfStats.values()).map(entry => Object.assign({}, entry));
     }
 
     setCCWAPI (ccwAPI) {
