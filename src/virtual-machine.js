@@ -925,13 +925,13 @@ class VirtualMachine extends EventEmitter {
         // Clear the current runtime
         this.clear();
 
-        // Clear Git data when loading new project to prevent data from previous project
-        if (this.runtime && this.runtime.platform && this.runtime.platform.git) {
-            this.runtime.platform.git = {
-                repository: null,
-                lastCommit: null,
-                lastFetch: null
-            };
+        // Reset platform data to default when loading new project to prevent
+        // data from previous project (e.g. platform.name) from leaking into
+        // the new runtime environment. This ensures checkPlatformCompatibility
+        // sees the correct default platform identity.
+        if (this.runtime) {
+            const defaultPlatform = require('./engine/tw-platform');
+            this.runtime.platform = Object.assign({}, defaultPlatform);
         }
 
         if (typeof performance !== 'undefined') {
